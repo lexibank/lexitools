@@ -1,2 +1,3 @@
-# development environment: install in development mode
--e .[dev,test]
+pylexibank
+pyclts
+linse @ git+https://github.com/lingpy/linse.git#egg=linse

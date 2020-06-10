@@ -2,15 +2,39 @@
 check structure if the tokens are matching the template.
 """
 from clldutils.clilib import PathType
-from cldfbench.cli_util import get_dataset
+from cldfbench.cli_util import add_catalog_spec, get_dataset
 from tabulate import tabulate
 from linse.annotate import seallable
 from linse.transform import morphemes
 
+from pylexibank.cli_util import add_dataset_spec
+
+
+def register(parser):
+    """
+    Register command options and arguments.
+
+    :param parser: and `argparse.ArgumentParser`instance.
+    """
+    # Standard catalogs can be "requested" as follows:
+    add_catalog_spec(parser, "clts")
+
+    # Require a dataset as argument for the command:
+    add_dataset_spec(parser)
+
+    # Add another argument:
+
+
+#    parser.add_argument(
+#        'input_file',
+#        type=PathType(type='file'),
+#        help='some input from a file',
+#    )
+
 
 def get_structure(sequence):
     """
-    produce a list of structure tokens 
+    produce a list of structure tokens
     """
     out = []
     for m in morphemes(sequence):
@@ -105,7 +129,6 @@ def run(args):
         )
     )
 
-
-morphemes = set([(line[-4], str(line[-3]), str(line[-2])) for line in table])
-for a, b, c in sorted(morphemes, key=lambda x: x[-2]):
-    print(a + "\t" + b + "\t" + c)
+    morphemes = set([(line[-4], str(line[-3]), str(line[-2])) for line in table])
+    for a, b, c in sorted(morphemes, key=lambda x: x[-2]):
+        print(a + "\t" + b + "\t" + c)

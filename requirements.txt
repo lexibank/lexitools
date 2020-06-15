@@ -1,3 +1,5 @@
+numpy
+powerlaw
 pylexibank
 pyclts
 linse @ git+https://github.com/lingpy/linse.git#egg=linse

@@ -3,6 +3,7 @@ Run a phonological inventory comparison.
 """
 
 from collections import defaultdict
+import pathlib
 
 # Import MPI-SHH libraries
 import pyclts
@@ -12,6 +13,7 @@ from clldutils.clilib import PathType
 from cldfbench import get_dataset
 from cldfbench.cli_util import add_catalog_spec
 from pylexibank.cli_util import add_dataset_spec
+import pycldf.dataset
 
 
 def register(parser):
@@ -58,10 +60,21 @@ def run(args):
     bipa = pyclts.CLTS(args.clts.dir).bipa
     glottolog = pyglottolog.Glottolog(args.glottolog.dir)
 
-    # Get dataset readers
+    # Get dataset readers; as `get_dataset()` does not accept metadata files,
+    # we check the arguments and load with `pycldf` if that is the case
+    # TODO: deal with lexibank datasets, computing the inventories
     args.log.info("Loading CLDF datasets...")
-    ds1 = get_dataset(args.ds1).cldf_reader()
-    ds2 = get_dataset(args.ds2).cldf_reader()
+    ds1_path = pathlib.Path(args.ds1).resolve()
+    ds2_path = pathlib.Path(args.ds2).resolve()
+    if ds1_path.name.endswith("-metadata.json"):
+        ds1 = pycldf.dataset.StructureDataset.from_metadata(ds1_path)
+    else:
+        ds1 = get_dataset(args.ds1).cldf_reader()
+
+    if ds2_path.name.endswith("-metadata.json"):
+        ds2 = pycldf.dataset.StructureDataset.from_metadata(ds2_path)
+    else:
+        ds2 = get_dataset(args.ds1).cldf_reader()
 
     ds1_name = ds1.metadata_dict["rdf:ID"].upper()
     ds2_name = ds2.metadata_dict["rdf:ID"].upper()
@@ -100,6 +113,8 @@ def run(args):
             "Strict_Similarity_V",
             f"Approx_Similarity_{ds1_name}_V",
             f"Approx_Similarity_{ds2_name}_V",
+            f"Inventory_{ds1_name}_Full",
+            f"Inventory_{ds2_name}_Full",
             "Shared_Consonants",
             "Shared_Vowels",
             f"Exclusive_{ds1_name}_Consonants",
@@ -181,6 +196,8 @@ def run(args):
                 similarity["strict-vowel"],
                 similarity["appr12-vowel"],
                 similarity["appr21-vowel"],
+                " ".join(sounds1["consonant"] + sounds1["vowel"]),
+                " ".join(sounds2["consonant"] + sounds2["vowel"]),
                 " ".join(
                     [snd for snd in sounds1["consonant"] if snd in sounds2["consonant"]]
                 ),

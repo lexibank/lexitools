@@ -2,7 +2,8 @@
 Run a phonological inventory comparison.
 """
 
-from collections import defaultdict
+from itertools import chain
+from collections import defaultdict, Counter
 import pathlib
 
 # Import MPI-SHH libraries
@@ -41,12 +42,86 @@ def get_glottocodes(dataset):
     return {entry["Glottocode"]: entry["ID"] for entry in dataset["LanguageTable"]}
 
 
+# TODO: add flag for stripping tones
+def lexeme2phonemes(lexeme, bipa, **kwargs):
+    """
+    Given a segment string, return it as a list of phonemes.
+
+    Parameters
+    ----------
+    bipa : BIPA object
+        CLTS object for grapheme normalization
+    keep_mark : bool
+        Whether to keep markers (default: remove)
+    """
+
+    # Parse flags for phoneme processing
+    keep_mark = kwargs.get("keep_mark", False)
+
+    # Perform all processing
+    phonemes = [
+        str(bipa[phoneme])
+        for phoneme in lexeme
+        if not isinstance(bipa[phoneme], pyclts.models.UnknownSound)
+    ]
+
+    if not keep_mark:
+        phonemes = [phoneme for phoneme in phonemes if phoneme not in ["+", "_"]]
+
+    return phonemes
+
+
+def read_extended_wordlist_data(dataset, bipa):
+    """
+    Reads phonemes and syllables from a dataset.
+    """
+
+    # Collect data; for the time being only Language_ID (for grouping)
+    # and Segments. No other variable is taken into account, particularly
+    # the concept, which in the future could be used for matters like
+    # phonotactics
+    data = []
+    for row in list(dataset["FormTable"]):
+        phonemes = lexeme2phonemes(row["Segments"], bipa)
+
+        data.append(
+            {
+                "Language_ID": row["Language_ID"],
+                "Segments": row["Segments"],
+                "Phonemes": phonemes,
+                "Phoneme_Length": len(phonemes),
+            }
+        )
+
+    return data
+
+
 def get_inventories(dataset, bipa):
     inv = defaultdict(set)
-    for row in list(dataset["ValueTable"]):
-        sound = bipa[row["Value"]]
-        if not isinstance(sound, pyclts.models.UnknownSound):
-            inv[row["Language_ID"]].add(str(sound))
+
+    # Get mapping from language_id to glottocode
+    langmap = {row["ID"]: row["Glottocode"] for row in dataset["LanguageTable"]}
+
+    # Extract inventories
+    if dataset.module == "StructureDataset":
+        # Inventory collections
+        for row in list(dataset["ValueTable"]):
+            sound = bipa[row["Value"]]
+            if not isinstance(sound, pyclts.models.UnknownSound):
+                inv[langmap[row["Language_ID"]]].add(str(sound))
+    elif dataset.module == "Wordlist":
+        # Lexibank datasets
+        data = read_extended_wordlist_data(dataset, bipa)
+        vocabularies = defaultdict(list)
+        for entry in data:
+            vocabularies[langmap[entry["Language_ID"]]].append(entry["Phonemes"])
+
+        phoneme_count = {
+            language: Counter(chain.from_iterable(lexemes))
+            for language, lexemes in vocabularies.items()
+        }
+
+        inv = {language: list(counter) for language, counter in phoneme_count.items()}
 
     return inv
 
@@ -74,7 +149,7 @@ def run(args):
     if ds2_path.name.endswith("-metadata.json"):
         ds2 = pycldf.dataset.StructureDataset.from_metadata(ds2_path)
     else:
-        ds2 = get_dataset(args.ds1).cldf_reader()
+        ds2 = get_dataset(args.ds2).cldf_reader()
 
     ds1_name = ds1.metadata_dict["rdf:ID"].upper()
     ds2_name = ds2.metadata_dict["rdf:ID"].upper()
@@ -85,13 +160,13 @@ def run(args):
     lang2 = get_glottocodes(ds2)
     args.log.info(f"Dataset #2 has {len(lang2)} languages.")
 
-    # Get overlapping glottocodes
-    overlap = [glottocode for glottocode in lang1 if glottocode in lang2]
-    args.log.info(f"There are {len(overlap)} overlapping glottocodes.")
-
     # Get inventoris by ids
     invs1 = get_inventories(ds1, bipa)
     invs2 = get_inventories(ds2, bipa)
+
+    # Get overlapping glottocodes
+    overlap = [glottocode for glottocode in invs1 if glottocode in invs2]
+    args.log.info(f"There are {len(overlap)} overlapping glottocodes.")
 
     # Compare all overlapping glottocodes
     with open(args.output, "w") as handler:
@@ -127,8 +202,7 @@ def run(args):
 
         for glottocode in sorted(overlap):
             args.log.info("Comparing inventories for glottocode `%s`...", glottocode)
-            lang1_id = lang1[glottocode]
-            lang2_id = lang2[glottocode]
+            lang1_id, lang2_id = glottocode, glottocode
             inv1 = Inventory.from_list(*list(invs1[lang1_id]), clts=bipa)
             inv2 = Inventory.from_list(*list(invs2[lang2_id]), clts=bipa)
 

@@ -7,11 +7,13 @@ from collections import Counter, defaultdict
 from itertools import chain
 from pathlib import Path
 import unicodedata
+import random
 
 # Import 3rd party libraries
 import numpy as np
 import powerlaw
 import matplotlib.pyplot as plt
+import scipy.stats
 
 # Import MPI-SHH libraries
 from clldutils.clilib import PathType
@@ -22,6 +24,8 @@ from lingpy.sequence.sound_classes import syllabify
 
 # Silence `powerlaw` divide by zero warnings
 np.seterr(divide="ignore", invalid="ignore")
+
+SAMPLE_SIZE = [0.05, 0.25, 0.5, 0.666, 0.75, 0.90, 1.00]
 
 
 def analyze_inventory(inventory, language, args):
@@ -179,7 +183,31 @@ def save_figure(figure, filename, args, format="png", dpi=150):
     out_figure.savefig(output_path.as_posix(), bbox_inches="tight", dpi=dpi)
 
 
-def output_stats(stats, args):
+def output_sample_stats(ks_stats, size_stats, phoneme_count, args):
+    # Get languages
+    langs = sorted(set([key[0] for key in ks_stats]))
+
+    headers = ["Language", "Segments"]
+    for sample_size in SAMPLE_SIZE:
+        headers.append("KS_%.2f" % sample_size)
+        headers.append("SIZE_%.2f" % sample_size)
+
+    output_path = Path(args.output_dir) / "sample_stats.tsv"
+    with open(output_path.as_posix(), "w") as handler:
+        handler.write("\t".join(headers))
+        handler.write("\n")
+
+        for lang in langs:
+            buf = [lang, str(len(phoneme_count[lang]))]
+            for sample_size in SAMPLE_SIZE:
+                buf.append("%.4f" % ks_stats[lang, sample_size])
+                buf.append("%.2f" % size_stats[lang, sample_size])
+
+            handler.write("\t".join(buf))
+            handler.write("\n")
+
+
+def output_powerlaw_stats(stats, args):
 
     fields = [
         "alpha",
@@ -221,7 +249,7 @@ def output_stats(stats, args):
         "stretched_exponential.R",
     ]
 
-    output_path = Path(args.output_dir) / "stats.tsv"
+    output_path = Path(args.output_dir) / "pl_stats.tsv"
     with open(output_path.as_posix(), "w") as handler:
         # write headers
         headers = ["LANGUAGE"] + [header.upper() for header in fields]
@@ -364,6 +392,30 @@ def collect_inventories(data):
     return phoneme_count, syllable_count
 
 
+def collect_sampled_inventories(data, k=10):
+    """
+    Collect inventories per language.
+    """
+
+    random.seed()
+
+    vocabularies = defaultdict(list)
+    for entry in data:
+        vocabularies[entry["Language_ID"]].append(entry["Phonemes"])
+
+    counts = defaultdict(dict)
+    for lang, vocab in vocabularies.items():
+        for sample_size in SAMPLE_SIZE:
+            counts[sample_size][lang] = []
+            size = int(len(vocab) * sample_size)
+            for i in range(k):
+                sample = random.sample(vocab, size)
+                phoneme_count = Counter(chain.from_iterable(sample))
+                counts[sample_size][lang].append(phoneme_count)
+
+    return counts
+
+
 def register(parser):
     """
     Register command options and arguments.
@@ -398,6 +450,33 @@ def run(args):
     phoneme_count, syllable_count = collect_inventories(data)
     args.log.info("Read %i inventories.", len(phoneme_count))
 
+    # Collect inventories by size, testing the sample size needed
+    args.log.info("Estimating sample sizes...")
+    sampled = collect_sampled_inventories(data)
+    args.log.info("Read %i inventories.", len(sampled))
+
+    # Estimate sample sizes, and compute the means for output
+    ks_stats = defaultdict(list)
+    size_stats = defaultdict(list)
+    for lang, full in phoneme_count.items():
+        dist1 = [full.get(sound, None) for sound in sorted(full)]
+        for sample_size in sampled:
+            for i, sample in enumerate(sampled[sample_size][lang]):
+                dist2 = [sample.get(sound, 0) for sound in sorted(full)]
+
+                ks, p = scipy.stats.ks_2samp(dist1, dist2)
+
+                ks_stats[lang, sample_size].append(ks)
+                size_stats[lang, sample_size].append(len(sample))
+
+    ks_stats = {key: np.mean(ks_values) for key, ks_values in ks_stats.items()}
+    size_stats = {
+        key: np.mean([[size / len(phoneme_count[key[0]])] for size in sizes])
+        for key, sizes in size_stats.items()
+    }
+
+    output_sample_stats(ks_stats, size_stats, phoneme_count, args)
+
     # iterate over all phoneme inventories
     stats = {}
     for language, inventory in phoneme_count.items():
@@ -406,5 +485,5 @@ def run(args):
         stats[language] = lang_stats
 
     # Output statistics
-    args.log.info("Writing statistics...")
-    output_stats(stats, args)
+    args.log.info("Writing results...")
+    output_powerlaw_stats(stats, args)

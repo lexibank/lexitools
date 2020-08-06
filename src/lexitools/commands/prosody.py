@@ -2,14 +2,10 @@
 Check the prosodic structure of a given dataset.
 """
 
-from clldutils.clilib import PathType
+from clldutils.clilib import Table, add_format
 from cldfbench.cli_util import add_catalog_spec, get_dataset
-from tabulate import tabulate
-from pylexibank import progressbar
-from collections import defaultdict
 
-from linse.annotate import prosody, clts
-from linse.transform import syllables, morphemes
+from linse.transform import syllable_inventories
 
 from pylexibank.cli_util import add_dataset_spec
 
@@ -20,16 +16,10 @@ def register(parser):
 
     # Require a dataset as argument for the command:
     add_dataset_spec(parser)
+    add_format(parser, default='pipe')
 
-    # Add another argument:
-    #parser.add_argument(
-    #        '--medials',
-    #        action='store',
-    #        default=None,
-    #        help='define your medials'
-    #        )
     parser.add_argument(
-            '--doculect',
+            '--language-id',
             action='store',
             default=None,
             help='select one doculect'
@@ -39,27 +29,24 @@ def register(parser):
             action='store',
             default=None,
             help='select a display')
+    parser.add_argument(
+            '--prosody-format',
+            action='store',
+            default='CcV',
+            help='select a format for the prosodic strings')
 
 
 def run(args):
 
     ds = get_dataset(args)
-    P = defaultdict(lambda : defaultdict(list))
-    if ds.cldf_dir.joinpath("forms.csv").exists():
-        for row in progressbar(
-                ds.cldf_reader()['FormTable'], 
-                desc='iterate over wordlist'):
-            if row['Language_ID'] == args.doculect or not args.doculect:
-                if row['Language_ID'] not in P:
-                    P[row['Language_ID']] = defaultdict(lambda : defaultdict(list))
-                tmp = P[row['Language_ID']] # consider not doing this
-                for morpheme in morphemes(row['Segments']):
-                    for syl in syllables(morpheme):
-                        cv = prosody(syl, format='CcV')
-                        template = ''.join(cv)
-                        for i, (s, c) in enumerate(zip(syl, cv)):
-                            this_template = template[:i]+'**'+template[i]+'**'+template[i+1:]
-                            tmp[s][this_template] += [row['ID']]
+    forms = []
+    for row in ds.cldf_reader()['FormTable']:
+        if row['Language_ID'] == args.language_id or not args.language_id:
+            forms.append(row)
+
+    P = syllable_inventories(forms, format=args.prosody_format)
+    bipa = args.clts.from_config().api.transcriptionsystem_dict['bipa']
+
     table = []
     if args.display == 'long':
         header = [
@@ -68,7 +55,6 @@ def run(args):
             for sound, templates in data.items():
                 for template, frequency in templates.items():
                     table += [[language, sound, template, len(frequency)]]
-        print(tabulate(table, headers=header, tablefmt='pipe'))
     else:
         header = [
             'Language', 'Sound', 'Class', 'Frequency', 'Templates']
@@ -77,9 +63,9 @@ def run(args):
                 table += [[
                     language, 
                     sound, 
-                    clts(sound.split('/')[1] if '/' in sound else sound)[0].split()[-1],
+                    bipa[sound].type,
                     sum([len(x) for x in templates.values()]), 
                     ', '.join(['{0}:{1}'.format(x, len(y)) for x, y in templates.items()])]]
-        print(tabulate(
-            sorted(table, key=lambda x: (x[2], x[3], x[1]), reverse=True), 
-            headers=header, tablefmt='pipe'))
+
+    with Table(args, *header, rows=table):
+        pass

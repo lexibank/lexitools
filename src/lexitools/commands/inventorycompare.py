@@ -39,7 +39,8 @@ def register(parser):
 # Get a dictionary of glottocodes/IDs for comparison
 # NOTE: will fail if there is more than one ID for the same glottocode
 def get_glottocodes(dataset):
-    return {entry["Glottocode"]: entry["ID"] for entry in dataset["LanguageTable"]}
+    return {entry["Glottocode"]: entry["ID"] for entry in dataset["LanguageTable"]
+            if entry['Glottocode']}
 
 
 # TODO: add flag for stripping tones
@@ -165,7 +166,7 @@ def run(args):
     invs2 = get_inventories(ds2, bipa)
 
     # Get overlapping glottocodes
-    overlap = [glottocode for glottocode in invs1 if glottocode in invs2]
+    overlap = [glottocode for glottocode in invs1 if glottocode and glottocode in invs2]
     args.log.info(f"There are {len(overlap)} overlapping glottocodes.")
 
     # Compare all overlapping glottocodes

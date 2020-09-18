@@ -48,11 +48,12 @@ def register(parser):
             default=1,
             type=int,
             help='select a threshold')
-    #parser.add_argument(
-    #        '--prosody-format',
-    #        action='store',
-    #        default='CcV',
-    #        help='select a format for the prosodic strings')
+    parser.add_argument(
+            '--cutoff',
+            action='store',
+            default=2,
+            type=float,
+            help='select a threshold')
 
 
 def run(args):
@@ -83,19 +84,22 @@ def run(args):
     for idx, tokens, language in lex.iter_rows('tokens', 'doculect'):
         for sound in tokens:
             try:
-                G.node[sound]['weight'] += 1
+                #G.node[sound]['frequency'] += 1
                 G.node[sound]['language'].add(language)
             except:
                 G.add_node(
                         sound, 
-                        weight=1, 
-                        language=set(language),
+                        frequency=1, 
+                        language=set([language]),
                         name=bipa[sound].name, 
                         color=color[sound],
                         asjp=asjp[sound],
-                        sca=sca[sound]
+                        sca=sca[sound],
+                        type=bipa[sound].type
                         )
-    G.add_node('-', weight=0, language=set(lex.cols))
+                
+    # add the dummy node for gaps, in case we want to use it
+    G.add_node('-',frequency=0, language=set(lex.cols))
 
     for node, data in G.nodes(data=True):
         data['language'] = ', '.join(sorted(data['language']))
@@ -110,16 +114,29 @@ def run(args):
             if edit_dist(tokensA, tokensB) <= args.threshold:
                 almA, almB, sim = nw_align(tokensA, tokensB)
                 for soundA, soundB in zip(almA, almB):
-                    try:
-                        G[soundA][soundB]['weight'] += 1
-                        G[soundA][soundB]['language'].add((langA, langB))
-                    except:
-                        G.add_edge(
-                                soundA, 
-                                soundB, 
-                                weight=1, 
-                                language=set([(langA, langB)])
-                                )
+                    if soundA != soundB and not '-' in [soundA, soundB]:
+                        G.node[soundA]['frequency'] += 1
+                        G.node[soundB]['frequency'] += 1
+                        try:
+                            G[soundA][soundB]['frequency'] += 1
+                            G[soundA][soundB]['language'].add((langA, langB))
+                        except:
+                            G.add_edge(
+                                    soundA, 
+                                    soundB, 
+                                    frequency=1, 
+                                    language=set([(langA, langB)])
+                                    )
+
+    
+    # add weights and delete, using a normalization formula (from Dellert)
+    delis = []
+    for nA, nB, data in G.edges(data=True):
+        data['weight'] = data['frequency']**2/(
+                G.node[nA]['frequency']+G.node[nB]['frequency']-data['frequency'])
+        if data['frequency'] < args.cutoff:
+            delis += [(nA, nB)]
+    G.remove_edges_from(delis)
 
     table = []
     for nA, nB, data in sorted(G.edges(data=True), key=lambda x: x[2]['weight'], reverse=True):
@@ -128,16 +145,19 @@ def run(args):
             data['language'])])
         
 
-        if data['weight'] > 3:
+        if data['frequency'] >= args.cutoff:
             table += [[nA, 
-                '',#G.node[nA]['weight'], 
+                G.node[nA]['frequency'], 
                 nB, 
-                '', #G.node[nB]['weight'], 
-                data['weight']]]
+                G.node[nB]['frequency'], 
+                data['frequency'],
+                data['weight'],
+                G.node[nA]['type']]]
 
-
-
-    with Table(args, *['Lang A', 'Freq A', 'Lang B', 'Freq B', 'Occ'], rows=table):
+    with Table(
+            args, 
+            *['Lang A', 'Freq A', 'Lang B', 'Freq B', 'Occ', 'Weight'], 
+            rows=sorted(table, key=lambda x: (x[-1], x[-2]))):
         pass
 
 

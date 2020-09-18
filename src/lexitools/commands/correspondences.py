@@ -82,7 +82,7 @@ def run(args):
 
     G = nx.Graph()
     for idx, tokens, language in lex.iter_rows('tokens', 'doculect'):
-        for sound in tokens:
+        for sound in [t.split('/')[1] if '/' in t else t for t in tokens]:
             try:
                 #G.node[sound]['frequency'] += 1
                 G.node[sound]['language'].add(language)
@@ -107,14 +107,23 @@ def run(args):
 
     for lA, lB in progressbar(combinations(lex.cols, r=2)):
         for idxA, idxB in lex.pairs[lA, lB]:
-            tokensA, tokensB = lex[idxA, 'tokens'], lex[idxB, 'tokens']
+            tokensA, tokensB = (
+                    [t.split('/')[1] if '/' in t else t for t in lex[idxA, 'tokens']],
+                    [t.split('/')[1] if '/' in t else t for t in lex[idxB, 'tokens']]
+                    )
             langA, langB = lex[idxA, 'doculect'], lex[idxB, 'doculect']
+            classesA, classesB = lex[idxA, 'classes'], lex[idxB, 'classes']
 
             # check for edit dist == 1
-            if edit_dist(tokensA, tokensB) <= args.threshold:
-                almA, almB, sim = nw_align(tokensA, tokensB)
+            if edit_dist(
+                    classesA, 
+                    classesB
+                        ) <= args.threshold:
+                pair = Pairwise(tokensA, tokensB)
+                pair.align()
+                almA, almB, sim = pair.alignments[0]
                 for soundA, soundB in zip(almA, almB):
-                    if soundA != soundB and not '-' in [soundA, soundB]:
+                    if soundA != soundB and not '-' in [soundA, soundB] and not '+' in [soundA, soundB]:
                         G.node[soundA]['frequency'] += 1
                         G.node[soundB]['frequency'] += 1
                         try:
@@ -162,4 +171,10 @@ def run(args):
 
 
     IG = networkx2igraph(G)
+    im = IG.community_infomap()
+    for i, comm in enumerate(im):
+        for node in comm:
+            IG.vs[node]['infomap'] = i+1
+
     IG.write_gml('{0}-graph.gml'.format(args.dataset))
+

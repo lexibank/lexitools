@@ -9,7 +9,7 @@ from linse.transform import syllable_inventories
 from pylexibank.cli_util import add_dataset_spec
 
 # lingpy for alignments
-from lingpy import *
+import lingpy
 # need this to store as GML format (for inspection)
 from lingpy.convert.graph import networkx2igraph
 
@@ -54,49 +54,58 @@ def register(parser):
             default=2,
             type=float,
             help='select a threshold')
+    parser.add_argument(
+            '--model',
+            action='store',
+            default='bipa',
+            type=str,
+            help='select a sound class model: asjp, bipa, color, sca')
 
+def iter_phonemes(tokens):
+    for segment in tokens:
+        if "/" in segment:
+            segment = segment.split("/")[1]
+        yield segment
 
 def run(args):
 
     ds = get_dataset(args)
     clts = args.clts.from_config().api
-    bipa = clts.transcriptionsystem_dict['bipa']
-    color = clts.soundclasses_dict['color']
-    asjp = clts.soundclasses_dict['asjp']
-    sca = clts.soundclasses_dict['sca']
+    sound_class = clts.transcriptionsystem_dict[args.model]
+
+    # columns=('parameter_id', 'concept_name', 'language_id', 'language_name',
+    #         'value', 'form', 'segments', 'language_glottocode',
+    #         'concept_concepticon_id', 'language_latitude',
+    #         'language_longitude')
+    # namespace=(('concept_name', 'concept'), ('language_id', 'doculect'),
+    #         ('segments', 'tokens'), ('language_glottocode', 'glottolog'),
+    #         ('concept_concepticon_id', 'concepticon'), ('language_latitude',
+    #             'latitude'), ('language_longitude', 'longitude'), ('cognacy',
+    #                 'cognacy'), ('cogid_cognateset_id', 'cogid'))
 
 
-    columns=('parameter_id', 'concept_name', 'language_id', 'language_name',
-            'value', 'form', 'segments', 'language_glottocode',
-            'concept_concepticon_id', 'language_latitude',
-            'language_longitude')
-    namespace=(('concept_name', 'concept'), ('language_id', 'doculect'),
-            ('segments', 'tokens'), ('language_glottocode', 'glottolog'),
-            ('concept_concepticon_id', 'concepticon'), ('language_latitude',
-                'latitude'), ('language_longitude', 'longitude'), ('cognacy',
-                    'cognacy'), ('cogid_cognateset_id', 'cogid'))
+    #  TODO: re-read brown, implement identical procedure until graph.
+    #   make it parametrizable whether we use asjp or other
 
-
-    lex = LexStat.from_cldf(ds.cldf_dir.joinpath('cldf-metadata.json'))
+    lex = lingpy.LexStat.from_cldf(ds.cldf_dir.joinpath('cldf-metadata.json'))
     args.log.info('Loaded the wordlist')
 
     G = nx.Graph()
     for idx, tokens, language in lex.iter_rows('tokens', 'doculect'):
-        for sound in [t.split('/')[1] if '/' in t else t for t in tokens]:
-            try:
-                #G.node[sound]['frequency'] += 1
-                G.node[sound]['language'].add(language)
-            except:
-                G.add_node(
-                        sound, 
-                        frequency=1, 
-                        language=set([language]),
-                        name=bipa[sound].name, 
-                        color=color[sound],
-                        asjp=asjp[sound],
-                        sca=sca[sound],
-                        type=bipa[sound].type
-                        )
+        # args.log.info("tokens:"+str(tokens))
+        for sound in iter_phonemes(tokens):
+            if sound not in "+*-":
+                # args.log.info("sound:"+ str(sound))
+                sound = sound_class[sound]
+                try:
+                    #G.node[sound]['frequency'] += 1
+                    G.node[sound]['language'].add(language)
+                except:
+                    G.add_node(
+                            sound,
+                            frequency=1,
+                            language=set([language]),
+                            )
                 
     # add the dummy node for gaps, in case we want to use it
     G.add_node('-',frequency=0, language=set(lex.cols))
@@ -107,23 +116,26 @@ def run(args):
 
     for lA, lB in progressbar(combinations(lex.cols, r=2)):
         for idxA, idxB in lex.pairs[lA, lB]:
-            tokensA, tokensB = (
-                    [t.split('/')[1] if '/' in t else t for t in lex[idxA, 'tokens']],
-                    [t.split('/')[1] if '/' in t else t for t in lex[idxB, 'tokens']]
-                    )
+            tokensA = list(iter_phonemes(lex[idxA, 'tokens']))
+            tokensB = list(iter_phonemes(lex[idxB, 'tokens']))
+            # args.log.info("---------")
+            # args.log.info(tokensA)
+            # args.log.info(tokensB)
             langA, langB = lex[idxA, 'doculect'], lex[idxB, 'doculect']
             classesA, classesB = lex[idxA, 'classes'], lex[idxB, 'classes']
 
-            # check for edit dist == 1
-            if edit_dist(
-                    classesA, 
-                    classesB
-                        ) <= args.threshold:
-                pair = Pairwise(tokensA, tokensB)
+            # check for edit dist == 1giot
+            potential_correspondence = lingpy.edit_dist(classesA, classesB) <= args.threshold
+            if potential_correspondence:
+                pair = lingpy.Pairwise(tokensA, tokensB)
                 pair.align()
                 almA, almB, sim = pair.alignments[0]
+                # args.log.info(almA)
+                # args.log.info(almB)
                 for soundA, soundB in zip(almA, almB):
                     if soundA != soundB and not '-' in [soundA, soundB] and not '+' in [soundA, soundB]:
+                        soundA = sound_class[soundA]
+                        soundB = sound_class[soundB]
                         G.node[soundA]['frequency'] += 1
                         G.node[soundB]['frequency'] += 1
                         try:
@@ -152,20 +164,19 @@ def run(args):
 
         data['language'] = ', '.join(['{0}/{1}'.format(a, b) for a, b in sorted(
             data['language'])])
-        
+
 
         if data['frequency'] >= args.cutoff:
-            table += [[nA, 
-                G.node[nA]['frequency'], 
-                nB, 
-                G.node[nB]['frequency'], 
+            table += [[nA,
+                G.node[nA]['frequency'],
+                nB,
+                G.node[nB]['frequency'],
                 data['frequency'],
-                data['weight'],
-                G.node[nA]['type']]]
+                data['weight']]]
 
     with Table(
-            args, 
-            *['Lang A', 'Freq A', 'Lang B', 'Freq B', 'Occ', 'Weight'], 
+            args,
+            *['Lang A', 'Freq A', 'Lang B', 'Freq B', 'Occ', 'Weight'],
             rows=sorted(table, key=lambda x: (x[-1], x[-2]))):
         pass
 

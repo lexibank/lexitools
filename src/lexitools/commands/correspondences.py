@@ -7,6 +7,8 @@ from cldfbench.cli_util import add_catalog_spec, get_dataset
 
 # from linse.transform import syllable_inventories
 from pylexibank.cli_util import add_dataset_spec
+from pyconcepticon.api import Concepticon
+from cldfcatalog import Config
 
 # lingpy for alignments
 import lingpy
@@ -21,6 +23,7 @@ from pylexibank import progressbar
 import networkx as nx
 import numpy as np
 import csv
+
 
 def register(parser):
     # Standard catalogs can be "requested" as follows:
@@ -61,17 +64,26 @@ def register(parser):
         type=str,
         help='select a sound class model: asjp, bipa, color, sca')
 
+    parser.add_argument(
+        '--concepts',
+        action='store',
+        default='Holman-2008-40',
+        type=str,
+        help='select a concept list to filter on')
+
 def iter_phonemes(tokens):
     for segment in tokens:
         if "/" in segment:
             segment = segment.split("/")[1]
         yield segment
 
+
 def sound_corresp_matrix(G, attr="total freq"):
     alphabet = G.nodes()
     matrix = nx.to_numpy_matrix(G, weight=attr)
     freq = [[G.node[s][attr]] for s in alphabet]
     return np.append(matrix, freq, axis=1).tolist()
+
 
 def run(args):
     ds = get_dataset(args)
@@ -80,6 +92,10 @@ def run(args):
         sound_class = clts.transcriptionsystem_dict[args.model]
     else:
         sound_class = clts.soundclasses_dict[args.model]
+
+    concepticon = Concepticon(Config.from_file().get_clone("concepticon"))
+    concept_dict = concepticon.conceptlists[args.concepts].concepts
+    concepts = {c.concepticon_id for c in concept_dict.values() if c.concepticon_id}
 
     # columns=('parameter_id', 'concept_name', 'language_id', 'language_name',
     #         'value', 'form', 'segments', 'language_glottocode',
@@ -91,8 +107,13 @@ def run(args):
     #             'latitude'), ('language_longitude', 'longitude'), ('cognacy',
     #                 'cognacy'), ('cogid_cognateset_id', 'cogid'))
 
-    lex = lingpy.LexStat.from_cldf(ds.cldf_dir.joinpath('cldf-metadata.json'))
+    lex = lingpy.LexStat.from_cldf(ds.cldf_dir.joinpath('cldf-metadata.json'),
+                filter=lambda row: row['concept_concepticon_id'] in concepts)
     args.log.info('Loaded the wordlist')
+
+    concepts_kept = set((a,b) for idx, a,b in lex.iter_rows('concept', 'concepticon'))
+    args.log.info("A total of {} concepts were used".format(len(concepts_kept)))
+
 
     # Record phoneme frequency
     G = nx.Graph()
@@ -112,7 +133,7 @@ def run(args):
     #     data['language'] = ', '.join(sorted(data['language']))
 
     n_lang = len(lex.cols)
-    tot_pairs = (n_lang * (n_lang -1))/2
+    tot_pairs = (n_lang * (n_lang - 1)) / 2
 
     # Record correspondences
     for lA, lB in progressbar(combinations(lex.cols, r=2), total=tot_pairs):
@@ -129,10 +150,10 @@ def run(args):
                 pair = lingpy.Pairwise(*token_strs)
                 pair.align()
                 almA, almB, sim = pair.alignments[0]
-                for soundA, soundB in zip(almA, almB):
-                    if soundA != soundB and not '-' in [soundA,
-                                                        soundB] and not '+' in [
-                        soundA, soundB]:
+                for sound_pair in zip(almA, almB):
+                    soundA, soundB = sound_pair
+                    if soundA != soundB and \
+                            not '-' in sound_pair and not '+' in sound_pair:
                         soundA = sound_class[soundA]
                         soundB = sound_class[soundB]
                         try:
@@ -173,16 +194,19 @@ def run(args):
     #                    data['weight']]]
 
     # Show graph
-    pos = nx.spring_layout(G, k=0.3,iterations=60)
-    weights = [G[u][v]['weight']*50 for u, v in G.edges()]
-    nx.draw(G,pos=pos, with_labels=True, width=weights, node_color="#45aaf2",
+    pos = nx.spring_layout(G, k=0.3, iterations=60)
+    weights = [G[u][v]['weight'] * 50 for u, v in G.edges()]
+    nx.draw(G, pos=pos, with_labels=True, width=weights, node_color="#45aaf2",
             node_size=500)
     plt.show()
 
     # Compute matrix
-    matrix = sound_corresp_matrix(G,attr="total freq")
-    with open('{}_{}occ_{}cols_{}_matrix.csv'.format(args.dataset, args.cutoff, args.threshold, args.model), 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile, delimiter=',',)
+    matrix = sound_corresp_matrix(G, attr="total freq")
+    with open('{}_{}occ_{}cols_{}_matrix.csv'.format(args.dataset, args.cutoff,
+                                                     args.threshold,
+                                                     args.model), 'w',
+              newline='') as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
         writer.writerow(list(G.nodes()) + ["freq"])
         for r in matrix:
             writer.writerow(r)

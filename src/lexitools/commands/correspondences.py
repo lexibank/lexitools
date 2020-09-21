@@ -182,10 +182,10 @@ def run(args):
     # Compute matrix
     matrix = sound_corresp_matrix(G,attr="total freq")
     with open('{}_{}occ_{}cols_{}_matrix.csv'.format(args.dataset, args.cutoff, args.threshold, args.model), 'w', newline='') as csvfile:
-        spamwriter = csv.writer(csvfile, delimiter=',',)
-        spamwriter.writerow(list(G.nodes()) + ["freq"])
+        writer = csv.writer(csvfile, delimiter=',',)
+        writer.writerow(list(G.nodes()) + ["freq"])
         for r in matrix:
-            spamwriter.writerow(r)
+            writer.writerow(r)
 
     # with Table(
     #         args,

@@ -173,14 +173,15 @@ def run(args):
     #                    data['weight']]]
 
     # Show graph
-    pos = nx.spring_layout(G)
+    pos = nx.spring_layout(G, k=0.3,iterations=60)
     weights = [G[u][v]['weight']*50 for u, v in G.edges()]
-    nx.draw(G,pos=pos, with_labels=True, width=weights)
+    nx.draw(G,pos=pos, with_labels=True, width=weights, node_color="#45aaf2",
+            node_size=500)
     plt.show()
 
     # Compute matrix
     matrix = sound_corresp_matrix(G,attr="total freq")
-    with open('{}_{}_{}_matrix.csv'.format(args.dataset, args.threshold, args.model), 'w', newline='') as csvfile:
+    with open('{}_{}occ_{}cols_{}_matrix.csv'.format(args.dataset, args.cutoff, args.threshold, args.model), 'w', newline='') as csvfile:
         spamwriter = csv.writer(csvfile, delimiter=',',)
         spamwriter.writerow(list(G.nodes()) + ["freq"])
         for r in matrix:

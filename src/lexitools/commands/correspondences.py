@@ -19,7 +19,8 @@ import matplotlib.pyplot as plt
 from pylexibank import progressbar
 
 import networkx as nx
-
+import numpy as np
+import csv
 
 def register(parser):
     # Standard catalogs can be "requested" as follows:
@@ -52,6 +53,7 @@ def register(parser):
         default=2,
         type=float,
         help='select a threshold')
+
     parser.add_argument(
         '--model',
         action='store',
@@ -59,18 +61,25 @@ def register(parser):
         type=str,
         help='select a sound class model: asjp, bipa, color, sca')
 
-
 def iter_phonemes(tokens):
     for segment in tokens:
         if "/" in segment:
             segment = segment.split("/")[1]
         yield segment
 
+def sound_corresp_matrix(G, attr="total freq"):
+    alphabet = G.nodes()
+    matrix = nx.to_numpy_matrix(G, weight=attr)
+    freq = [[G.node[s][attr]] for s in alphabet]
+    return np.append(matrix, freq, axis=1).tolist()
 
 def run(args):
     ds = get_dataset(args)
     clts = args.clts.from_config().api
-    sound_class = clts.transcriptionsystem_dict[args.model]
+    if args.model == "bipa":
+        sound_class = clts.transcriptionsystem_dict[args.model]
+    else:
+        sound_class = clts.soundclasses_dict[args.model]
 
     # columns=('parameter_id', 'concept_name', 'language_id', 'language_name',
     #         'value', 'form', 'segments', 'language_glottocode',
@@ -82,18 +91,14 @@ def run(args):
     #             'latitude'), ('language_longitude', 'longitude'), ('cognacy',
     #                 'cognacy'), ('cogid_cognateset_id', 'cogid'))
 
-    #  TODO: re-read brown, implement identical procedure until graph.
-    #   make it parametrizable whether we use asjp or other
-
     lex = lingpy.LexStat.from_cldf(ds.cldf_dir.joinpath('cldf-metadata.json'))
     args.log.info('Loaded the wordlist')
 
+    # Record phoneme frequency
     G = nx.Graph()
     for idx, tokens, language in lex.iter_rows('tokens', 'doculect'):
-        # args.log.info("tokens:"+str(tokens))
         for sound in iter_phonemes(tokens):
             if sound not in "+*-":
-                # args.log.info("sound:"+ str(sound))
                 sound = sound_class[sound]
                 try:
                     G.node[sound]['frequency'][language] += 1
@@ -106,25 +111,24 @@ def run(args):
     # for node, data in G.nodes(data=True):
     #     data['language'] = ', '.join(sorted(data['language']))
 
-    for lA, lB in progressbar(combinations(lex.cols, r=2)):
+    n_lang = len(lex.cols)
+    tot_pairs = (n_lang * (n_lang -1))/2
+
+    # Record correspondences
+    for lA, lB in progressbar(combinations(lex.cols, r=2), total=tot_pairs):
         for idxA, idxB in lex.pairs[lA, lB]:
             tokensA = list(iter_phonemes(lex[idxA, 'tokens']))
             tokensB = list(iter_phonemes(lex[idxB, 'tokens']))
-            # args.log.info("---------")
-            # args.log.info(tokensA)
-            # args.log.info(tokensB)
             langA, langB = lex[idxA, 'doculect'], lex[idxB, 'doculect']
             # classesA, classesB = lex[idxA, 'classes'], lex[idxB, 'classes']
 
             # check for edit dist == 1giot
-            potential_correspondence = lingpy.edit_dist(tokensA,
-                                                        tokensB) <= args.threshold
-            if potential_correspondence:
-                pair = lingpy.Pairwise(tokensA, tokensB)
+            token_strs = ' '.join(tokensA), ' '.join(tokensB)
+            potential_corresp = lingpy.edit_dist(*token_strs) <= args.threshold
+            if potential_corresp:
+                pair = lingpy.Pairwise(*token_strs)
                 pair.align()
                 almA, almB, sim = pair.alignments[0]
-                # args.log.info(almA)
-                # args.log.info(almB)
                 for soundA, soundB in zip(almA, almB):
                     if soundA != soundB and not '-' in [soundA,
                                                         soundB] and not '+' in [
@@ -137,22 +141,7 @@ def run(args):
                             G.add_edge(soundA, soundB,
                                        frequency=Counter({(langA, langB): 1}))
 
-    # TODO: get genus level info
-    # TODO: compute Correspondence percentage
-    """Correspondence percentage is a more complex measure that corrects for 
-    the frequency of individual sounds by recognizing the availability
-    of a genus for a given correspondence. A genus is defined as ‘available’ for a corre-
-    spondence between two sounds, X and Y, if it contains at least two languages of which
-    one has two or more occurrences of X in the words making up its forty-item list and the
-    other language has two or more occurrences of Y in its word list. X and Y can occur in
-    any words, not necessarily words with the same meaning. The pairs of items are al-
-    lowed to be different because availability should reflect the frequency of the sounds in-
-    dependently of any relationship between them. The correspondence percentage is
-    defined as the frequency of the correspondence divided by the total number of genera
-    available for the correspondence, expressed as a percentage. In other words, the corre-
-    spondence percentage is the percentage of available genera that actually show the cor-
-    respondence.
-    """
+    # Filter out rare correspondences, compute metrics
     del_edges = []
     for nA, nB, data in G.edges(data=True):
         for lA, lB in list(data['frequency']):
@@ -163,35 +152,45 @@ def run(args):
             del_edges += [(nA, nB)]
         else:
             freq_edge = sum(data['frequency'].values())
-            freq_nA = sum(G.node[nA]['frequency'].values())
-            freq_nB = sum(G.node[nB]['frequency'].values())
-            G.node[nB]['total freq'] = freq_nB
-            G.node[nA]['total freq'] = freq_nA
             data['num pairs'] = len(data['frequency'])
             data['total freq'] = freq_edge
+            data['weight'] = data['num pairs'] / tot_pairs
     G.remove_edges_from(del_edges)
 
-    table = []
-    for nA, nB, data in sorted(G.edges(data=True), key=lambda x: x[2]['num pairs'],
-                               reverse=True):
-        data['language'] = ', '.join(
-            ['{0}/{1}'.format(a, b) for a, b in sorted(data['frequency'])])
+    for n in G.nodes():
+        G.node[n]['total freq'] = sum(G.node[n]['frequency'].values())
+    #
+    # table = []
+    # for nA, nB, data in sorted(G.edges(data=True), key=lambda x: x[2]['weight'],
+    #                            reverse=True):
+    #     data['language'] = ', '.join(
+    #         ['{0}/{1}'.format(a, b) for a, b in sorted(data['frequency'])])
+    #
+    #     if data['total freq'] >= args.cutoff:
+    #         table += [[nA, G.node[nA]['total freq'],
+    #                    nB, G.node[nB]['total freq'],
+    #                    data['total freq'], data['num pairs'],
+    #                    data['weight']]]
 
-        if data['total freq'] >= args.cutoff:
-            table += [[nA, G.node[nA]['total freq'],
-                       nB, G.node[nB]['total freq'],
-                       data['total freq'], data['num pairs']]]
-
+    # Show graph
     pos = nx.spring_layout(G)
-    weights = [G[u][v]['num pairs'] for u, v in G.edges()]
+    weights = [G[u][v]['weight']*50 for u, v in G.edges()]
     nx.draw(G,pos=pos, with_labels=True, width=weights)
     plt.show()
 
-    with Table(
-            args,
-            *['Sound A', 'Freq A', 'Sound B', 'Freq B', 'Occ', 'Pairs'],
-            rows=sorted(table, key=lambda x: (str(x[0]), str(x[2])))):
-        pass
+    # Compute matrix
+    matrix = sound_corresp_matrix(G,attr="total freq")
+    with open('{}_{}_{}_matrix.csv'.format(args.dataset, args.threshold, args.model), 'w', newline='') as csvfile:
+        spamwriter = csv.writer(csvfile, delimiter=',',)
+        spamwriter.writerow(list(G.nodes()) + ["freq"])
+        for r in matrix:
+            spamwriter.writerow(r)
+
+    # with Table(
+    #         args,
+    #         *['Sound A', 'Freq A', 'Sound B', 'Freq B', 'Occ', 'Pairs', 'Weight'],
+    #         rows=sorted(table, key=lambda x: (str(x[0]), str(x[2])))):
+    #     pass
     #
     #
     # IG = networkx2igraph(G)

@@ -158,10 +158,8 @@ def run(args):
         tot_sound_pairs = (n_sounds * (n_sounds - 1)) / 2
         sound_pairs = combinations(freq_data, r=2)
         for sound_A, sound_B in progressbar(sound_pairs, total=tot_sound_pairs):
-            occ_A = set(
-                {lg for lg in freq_data[sound_A] if freq_data[sound_A][lg] > 1})
-            occ_B = set(
-                {lg for lg in freq_data[sound_B] if freq_data[sound_B][lg] > 1})
+            occ_A = {lg for lg in freq_data[sound_A] if freq_data[sound_A][lg] > 1}
+            occ_B = {lg for lg in freq_data[sound_B] if freq_data[sound_B][lg] > 1}
             # Available if there are 2 distinct languages with each at least 2 occurences
             if occ_A and occ_B and (
                     len(occ_A) > 1 or len(occ_B) > 1 or occ_A != occ_B):

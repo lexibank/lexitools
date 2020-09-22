@@ -72,11 +72,13 @@ def register(parser):
         help='select a concept list to filter on')
 
 
-def iter_phonemes(tokens):
+def iter_phonemes(tokens, map=None):
+    if map is None:
+        map = {}
     for segment in tokens:
         if "/" in segment:
             segment = segment.split("/")[1]
-        yield segment
+        yield map.get(segment, segment)
 
 
 def get_langgenera_mapping(path):
@@ -174,26 +176,20 @@ def run(args):
     # Record correspondences
     for lA, lB in progressbar(combinations(lex.cols, r=2), total=tot_pairs):
         for idxA, idxB in lex.pairs[lA, lB]:
-            tokensA = list(iter_phonemes(lex[idxA, 'tokens']))
-            tokensB = list(iter_phonemes(lex[idxB, 'tokens']))
+            tokensA = list(iter_phonemes(lex[idxA, 'tokens'], map=sound_class))
+            tokensB = list(iter_phonemes(lex[idxB, 'tokens'], map=sound_class))
 
             langA, langB = lex[idxA, 'glottolog'], lex[idxB, 'glottolog']
             # classesA, classesB = lex[idxA, 'classes'], lex[idxB, 'classes']
 
-            mapped_tokA = [sound_class[s] for s in tokensA]
-            mapped_tokB = [sound_class[s] for s in tokensB]
-            potential_corresp = lingpy.edit_dist(mapped_tokA,
-                                                 mapped_tokB) <= args.threshold
+            tokens = ' '.join(tokensA), ' '.join(tokensB)
+            potential_corresp = lingpy.edit_dist(*tokens) <= args.threshold
             if potential_corresp:
-                pair = lingpy.Pairwise(' '.join(tokensA), ' '.join(tokensB))
-                pair.align()
-                almA, almB, sim = pair.alignments[0]
+                almA, almB, sim  = lingpy.nw_align(*tokens)
                 for sound_pair in zip(almA, almB):
                     soundA, soundB = sound_pair
                     if soundA != soundB and \
                             not '-' in sound_pair and not '+' in sound_pair:
-                        soundA = sound_class[soundA]
-                        soundB = sound_class[soundB]
                         try:
                             G[soundA][soundB]['frequency'][(langA, langB)] += 1
                         except KeyError:

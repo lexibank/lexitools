@@ -92,6 +92,73 @@ def sound_corresp_matrix(G, attr="total freq"):
     return matrix.tolist()
 
 
+def find_available(args, genera, lex, sound_class):
+    sounds_by_genera = defaultdict(lambda: defaultdict(lambda: Counter()))
+    args.log.info('Counting available corresp...')
+    for idx, tokens, language in lex.iter_rows('tokens', 'glottolog'):
+        genus = genera[language]
+        for sound in iter_phonemes(tokens):
+            if sound not in "+*-":
+                sound = sound_class[sound]
+                sounds_by_genera[genus][sound][language] += 1
+    available = defaultdict(list)
+    for genus in sounds_by_genera:
+        freq_data = sounds_by_genera[genus]
+        n_sounds = len(freq_data)
+        tot_sound_pairs = (n_sounds * (n_sounds - 1)) / 2
+        sound_pairs = combinations(freq_data, r=2)
+        for sound_A, sound_B in progressbar(sound_pairs, total=tot_sound_pairs):
+            occ_A = {lg for lg in freq_data[sound_A] if
+                     freq_data[sound_A][lg] > 1}
+            occ_B = {lg for lg in freq_data[sound_B] if
+                     freq_data[sound_B][lg] > 1}
+            # Available if there are 2 distinct languages with each at least 2 occurences
+            if occ_A and occ_B and (
+                    len(occ_A) > 1 or len(occ_B) > 1 or occ_A != occ_B):
+                available[genus].append((sound_A, sound_B))
+    return available
+
+def make_graph(args, lex, sound_class):
+    args.log.info('Counting attested corresp...')
+    G = nx.Graph()
+    n_lang = len(lex.cols)
+    tot_pairs = (n_lang * (n_lang - 1)) / 2
+    for lA, lB in progressbar(combinations(lex.cols, r=2), total=tot_pairs):
+        for idxA, idxB in lex.pairs[lA, lB]:
+            tokensA = list(iter_phonemes(lex[idxA, 'tokens'], map=sound_class))
+            tokensB = list(iter_phonemes(lex[idxB, 'tokens'], map=sound_class))
+
+            langA, langB = lex[idxA, 'glottolog'], lex[idxB, 'glottolog']
+            tokens = ' '.join(tokensA), ' '.join(tokensB)
+            potential_corresp = lingpy.edit_dist(*tokens) <= args.threshold
+            if potential_corresp:
+                almA, almB, sim = lingpy.nw_align(*tokens)
+                for sound_pair in zip(almA, almB):
+                    soundA, soundB = sound_pair
+                    if soundA != soundB and \
+                            not '-' in sound_pair and not '+' in sound_pair:
+                        try:
+                            G[soundA][soundB]['frequency'][(langA, langB)] += 1
+                        except KeyError:
+                            G.add_edge(soundA, soundB,
+                                       frequency=Counter({(langA, langB): 1}))
+    args.log.info('Filtering out rare corresps...')
+    del_edges = []
+    for nA, nB, data in G.edges(data=True):
+        for lA, lB in list(data['frequency']):
+            freq = data['frequency'][(lA, lB)]
+            if freq < args.cutoff:
+                del data['frequency'][(lA, lB)]
+        if len(data['frequency']) == 0:
+            del_edges += [(nA, nB)]
+        else:
+            freq_edge = sum(data['frequency'].values())
+            data['num pairs'] = len(data['frequency'])
+            data['total freq'] = freq_edge
+            data['weight'] = data['num pairs'] / tot_pairs
+    G.remove_edges_from(del_edges)
+    return G
+
 def run(args):
     ds = get_dataset(args)
     clts = args.clts.from_config().api
@@ -100,8 +167,8 @@ def run(args):
     else:
         sound_class = clts.soundclasses_dict[args.model]
 
-    genera = get_langgenera_mapping(
-        "./src/lexitools/commands/lang_genera-v1.0.0.tsv")
+    langgenera_path = "./src/lexitools/commands/lang_genera-v1.0.0.tsv"
+    genera = get_langgenera_mapping(langgenera_path)
 
     concepticon = Concepticon(Config.from_file().get_clone("concepticon"))
     concept_dict = concepticon.conceptlists[args.concepts].concepts
@@ -126,102 +193,17 @@ def run(args):
                                    filter=lambda row: row[
                                                           'concept_concepticon_id'] in concepts)
     args.log.info('Loaded the wordlist')
-
-    concepts_kept = set(
-        (a, b) for idx, a, b in lex.iter_rows('concept', 'concepticon'))
+    concepts_kept = {(a, b) for idx, a, b in lex.iter_rows('concept', 'concepticon')}
     args.log.info("A total of {} concepts were used".format(len(concepts_kept)))
 
-    available = {}
-    attested = {}
+    available = find_available(args, genera, lex, sound_class)
+    G = make_graph(args, lex, sound_class)
 
-    # genus -> sound -> language -> count
-    sounds_by_genera = defaultdict(lambda: defaultdict(lambda: Counter()))
-
-    args.log.info('Counting available corresp...')
-    G = nx.Graph()
-    for idx, tokens, language in lex.iter_rows('tokens', 'glottolog'):
-        genus = genera[language]
-        for sound in iter_phonemes(tokens):
-            if sound not in "+*-":
-                sound = sound_class[sound]
-                sounds_by_genera[genus][sound][language] += 1
-
-    available = defaultdict(list)
-    for genus in sounds_by_genera:
-        freq_data = sounds_by_genera[genus]
-        n_sounds = len(freq_data)
-        tot_sound_pairs = (n_sounds * (n_sounds - 1)) / 2
-        sound_pairs = combinations(freq_data, r=2)
-        for sound_A, sound_B in progressbar(sound_pairs, total=tot_sound_pairs):
-            occ_A = {lg for lg in freq_data[sound_A] if freq_data[sound_A][lg] > 1}
-            occ_B = {lg for lg in freq_data[sound_B] if freq_data[sound_B][lg] > 1}
-            # Available if there are 2 distinct languages with each at least 2 occurences
-            if occ_A and occ_B and (
-                    len(occ_A) > 1 or len(occ_B) > 1 or occ_A != occ_B):
-                available[genus].append((sound_A, sound_B))
-
-    # for node, data in G.nodes(data=True):
-    #     data['language'] = ', '.join(sorted(data['language']))
-
-    args.log.info('Counting attested corresp...')
-    n_lang = len(lex.cols)
-    tot_pairs = (n_lang * (n_lang - 1)) / 2
-    # Record correspondences
-    for lA, lB in progressbar(combinations(lex.cols, r=2), total=tot_pairs):
-        for idxA, idxB in lex.pairs[lA, lB]:
-            tokensA = list(iter_phonemes(lex[idxA, 'tokens'], map=sound_class))
-            tokensB = list(iter_phonemes(lex[idxB, 'tokens'], map=sound_class))
-
-            langA, langB = lex[idxA, 'glottolog'], lex[idxB, 'glottolog']
-            # classesA, classesB = lex[idxA, 'classes'], lex[idxB, 'classes']
-
-            tokens = ' '.join(tokensA), ' '.join(tokensB)
-            potential_corresp = lingpy.edit_dist(*tokens) <= args.threshold
-            if potential_corresp:
-                almA, almB, sim  = lingpy.nw_align(*tokens)
-                for sound_pair in zip(almA, almB):
-                    soundA, soundB = sound_pair
-                    if soundA != soundB and \
-                            not '-' in sound_pair and not '+' in sound_pair:
-                        try:
-                            G[soundA][soundB]['frequency'][(langA, langB)] += 1
-                        except KeyError:
-                            G.add_edge(soundA, soundB,
-                                       frequency=Counter({(langA, langB): 1}))
-
-    args.log.info('Filtering out rare corresps...')
-    del_edges = []
-    for nA, nB, data in G.edges(data=True):
-        for lA, lB in list(data['frequency']):
-            freq = data['frequency'][(lA, lB)]
-            if freq < args.cutoff:
-                del data['frequency'][(lA, lB)]
-        if len(data['frequency']) == 0:
-            del_edges += [(nA, nB)]
-        else:
-            freq_edge = sum(data['frequency'].values())
-            data['num pairs'] = len(data['frequency'])
-            data['total freq'] = freq_edge
-            data['weight'] = data['num pairs'] / tot_pairs
-    G.remove_edges_from(del_edges)
-
-    #
-    # table = []
-    # for nA, nB, data in sorted(G.edges(data=True), key=lambda x: x[2]['weight'],
-    #                            reverse=True):
-    #     data['language'] = ', '.join(
-    #         ['{0}/{1}'.format(a, b) for a, b in sorted(data['frequency'])])
-    #
-    #     if data['total freq'] >= args.cutoff:
-    #         table += [[nA, G.node[nA]['total freq'],
-    #                    nB, G.node[nB]['total freq'],
-    #                    data['total freq'], data['num pairs'],
-    #                    data['weight']]]
 
     output_prefix = "{dataset}_{cutoff}occ_{threshold}cols_{model}".format(
         **vars(args))
 
-    # Show graph
+    # output graph
     pos = nx.spring_layout(G, iterations=60)
     weights = [G[u][v]['weight'] * 50 for u, v in G.edges()]
     nx.draw(G, pos=pos, with_labels=True,
@@ -252,18 +234,3 @@ def run(args):
                 except KeyError:
                     freq = 0
                 writer.writerow([genus, a, b, "True", freq])
-
-    # with Table(
-    #         args,
-    #         *['Sound A', 'Freq A', 'Sound B', 'Freq B', 'Occ', 'Pairs', 'Weight'],
-    #         rows=sorted(table, key=lambda x: (str(x[0]), str(x[2])))):
-    #     pass
-    #
-    #
-    # IG = networkx2igraph(G)
-    # im = IG.community_infomap()
-    # for i, comm in enumerate(im):
-    #     for node in comm:
-    #         IG.vs[node]['infomap'] = i+1
-    #
-    # IG.write_gml('{0}-graph.gml'.format(args.dataset))

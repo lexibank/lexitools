@@ -23,6 +23,8 @@ from pylexibank import progressbar
 import networkx as nx
 import numpy as np
 import csv
+import csvw
+
 
 
 def register(parser):
@@ -82,15 +84,8 @@ def iter_phonemes(tokens, map=None):
 
 
 def get_langgenera_mapping(path):
-    langgenera = {}
-    with open(path) as csvfile:
-        reader = csv.reader(csvfile, delimiter='\t')
-        header = next(reader)
-        for row in reader:
-            row_dict = dict(zip(header, row))
-            langgenera[row_dict["GLOTTOCODE"]] = row_dict["GENUS"]
-    return langgenera
-
+    with csvw.UnicodeDictReader(path, delimiter="\t") as reader:
+        return {row['GLOTTOCODE']: row['GENUS'] for row in reader}
 
 def sound_corresp_matrix(G, attr="total freq"):
     matrix = nx.to_numpy_matrix(G, weight=attr)

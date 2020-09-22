@@ -111,17 +111,21 @@ def run(args):
     concepts = {c.concepticon_id for c in concept_dict.values() if
                 c.concepticon_id}
 
-    # columns=('parameter_id', 'concept_name', 'language_id', 'language_name',
-    #         'value', 'form', 'segments', 'language_glottocode',
-    #         'concept_concepticon_id', 'language_latitude',
-    #         'language_longitude')
-    # namespace=(('concept_name', 'concept'), ('language_id', 'doculect'),
-    #         ('segments', 'tokens'), ('language_glottocode', 'glottolog'),
-    #         ('concept_concepticon_id', 'concepticon'), ('language_latitude',
-    #             'latitude'), ('language_longitude', 'longitude'), ('cognacy',
-    #                 'cognacy'), ('cogid_cognateset_id', 'cogid'))
+    columns = ('parameter_id', 'concept_name', 'language_id', 'language_name',
+               'value', 'form', 'segments', 'language_glottocode',
+               'concept_concepticon_id', 'language_latitude',
+               'language_longitude')
+    namespace = (('concept_name', 'concept'), ('language_id', 'doculect'),
+                 ('segments', 'tokens'), ('language_glottocode', 'glottolog'),
+                 ('concept_concepticon_id', 'concepticon'),
+                 ('language_latitude',
+                  'latitude'), ('language_longitude', 'longitude'), ('cognacy',
+                                                                     'cognacy'),
+                 ('cogid_cognateset_id', 'cogid'))
 
     lex = lingpy.LexStat.from_cldf(ds.cldf_dir.joinpath('cldf-metadata.json'),
+                                   columns=columns,
+                                   namespace=namespace,
                                    filter=lambda row: row[
                                                           'concept_concepticon_id'] in concepts)
     args.log.info('Loaded the wordlist')
@@ -178,7 +182,8 @@ def run(args):
 
             mapped_tokA = [sound_class[s] for s in tokensA]
             mapped_tokB = [sound_class[s] for s in tokensB]
-            potential_corresp = lingpy.edit_dist(mapped_tokA, mapped_tokB) <= args.threshold
+            potential_corresp = lingpy.edit_dist(mapped_tokA,
+                                                 mapped_tokB) <= args.threshold
             if potential_corresp:
                 pair = lingpy.Pairwise(' '.join(tokensA), ' '.join(tokensB))
                 pair.align()
@@ -233,8 +238,8 @@ def run(args):
     nx.draw(G, pos=pos, with_labels=True,
             width=weights, node_color="#45aaf2",
             node_size=500)
-    plt.savefig(output_prefix+"_graph.png",  bbox_inches="tight", pad_inches=0.1)
-
+    plt.savefig(output_prefix + "_graph.png", bbox_inches="tight",
+                pad_inches=0.1)
 
     # Output genus level info
     matrix = sound_corresp_matrix(G, attr="total freq")
@@ -247,13 +252,14 @@ def run(args):
     # Output genus level info
     with open(output_prefix + '_results.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["Genus","Sound A","Sound B", "Availability", "Freq"])
+        writer.writerow(["Genus", "Sound A", "Sound B", "Availability", "Freq"])
         for genus in available:
             for a, b in available[genus]:
                 try:
                     langs = G[a][b]["frequency"]
-                    freq = sum([1 for lg1,lg2 in langs
-                                if genera[lg1] == genus and genera[lg2] == genus])
+                    freq = sum([1 for lg1, lg2 in langs
+                                if
+                                genera[lg1] == genus and genera[lg2] == genus])
                 except KeyError:
                     freq = 0
                 writer.writerow([genus, a, b, "True", freq])

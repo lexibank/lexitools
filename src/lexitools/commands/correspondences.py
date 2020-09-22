@@ -16,7 +16,7 @@ import lingpy
 from lingpy.convert.graph import networkx2igraph
 
 from itertools import combinations
-from collections import Counter
+from collections import Counter, defaultdict
 import matplotlib.pyplot as plt
 from pylexibank import progressbar
 
@@ -71,6 +71,7 @@ def register(parser):
         type=str,
         help='select a concept list to filter on')
 
+
 def iter_phonemes(tokens):
     for segment in tokens:
         if "/" in segment:
@@ -78,11 +79,20 @@ def iter_phonemes(tokens):
         yield segment
 
 
+def get_langgenera_mapping(path):
+    langgenera = {}
+    with open(path) as csvfile:
+        reader = csv.reader(csvfile, delimiter='\t')
+        header = next(reader)
+        for row in reader:
+            row_dict = dict(zip(header, row))
+            langgenera[row_dict["GLOTTOCODE"]] = row_dict["GENUS"]
+    return langgenera
+
+
 def sound_corresp_matrix(G, attr="total freq"):
-    alphabet = G.nodes()
     matrix = nx.to_numpy_matrix(G, weight=attr)
-    freq = [[G.node[s][attr]] for s in alphabet]
-    return np.append(matrix, freq, axis=1).tolist()
+    return matrix.tolist()
 
 
 def run(args):
@@ -93,9 +103,13 @@ def run(args):
     else:
         sound_class = clts.soundclasses_dict[args.model]
 
+    genera = get_langgenera_mapping(
+        "./src/lexitools/commands/lang_genera-v1.0.0.tsv")
+
     concepticon = Concepticon(Config.from_file().get_clone("concepticon"))
     concept_dict = concepticon.conceptlists[args.concepts].concepts
-    concepts = {c.concepticon_id for c in concept_dict.values() if c.concepticon_id}
+    concepts = {c.concepticon_id for c in concept_dict.values() if
+                c.concepticon_id}
 
     # columns=('parameter_id', 'concept_name', 'language_id', 'language_name',
     #         'value', 'form', 'segments', 'language_glottocode',
@@ -108,39 +122,57 @@ def run(args):
     #                 'cognacy'), ('cogid_cognateset_id', 'cogid'))
 
     lex = lingpy.LexStat.from_cldf(ds.cldf_dir.joinpath('cldf-metadata.json'),
-                filter=lambda row: row['concept_concepticon_id'] in concepts)
+                                   filter=lambda row: row[
+                                                          'concept_concepticon_id'] in concepts)
     args.log.info('Loaded the wordlist')
 
-    concepts_kept = set((a,b) for idx, a,b in lex.iter_rows('concept', 'concepticon'))
+    concepts_kept = set(
+        (a, b) for idx, a, b in lex.iter_rows('concept', 'concepticon'))
     args.log.info("A total of {} concepts were used".format(len(concepts_kept)))
 
+    available = {}
+    attested = {}
 
-    # Record phoneme frequency
+    # genus -> sound -> language -> count
+    sounds_by_genera = defaultdict(lambda: defaultdict(lambda: Counter()))
+
+    args.log.info('Counting available corresp...')
     G = nx.Graph()
-    for idx, tokens, language in lex.iter_rows('tokens', 'doculect'):
+    for idx, tokens, language in lex.iter_rows('tokens', 'glottolog'):
+        genus = genera[language]
         for sound in iter_phonemes(tokens):
             if sound not in "+*-":
                 sound = sound_class[sound]
-                try:
-                    G.node[sound]['frequency'][language] += 1
-                except:
-                    G.add_node(sound, frequency=Counter({language: 1}))
+                sounds_by_genera[genus][sound][language] += 1
 
-    # add the dummy node for gaps, in case we want to use it
-    # G.add_node('-', frequency=Counter())
+    available = defaultdict(list)
+    for genus in sounds_by_genera:
+        freq_data = sounds_by_genera[genus]
+        n_sounds = len(freq_data)
+        tot_sound_pairs = (n_sounds * (n_sounds - 1)) / 2
+        sound_pairs = combinations(freq_data, r=2)
+        for sound_A, sound_B in progressbar(sound_pairs, total=tot_sound_pairs):
+            occ_A = set(
+                {lg for lg in freq_data[sound_A] if freq_data[sound_A][lg] > 1})
+            occ_B = set(
+                {lg for lg in freq_data[sound_B] if freq_data[sound_B][lg] > 1})
+            # Available if there are 2 distinct languages with each at least 2 occurences
+            if occ_A and occ_B and (
+                    len(occ_A) > 1 or len(occ_B) > 1 or occ_A != occ_B):
+                available[genus].append((sound_A, sound_B))
 
     # for node, data in G.nodes(data=True):
     #     data['language'] = ', '.join(sorted(data['language']))
 
+    args.log.info('Counting attested corresp...')
     n_lang = len(lex.cols)
     tot_pairs = (n_lang * (n_lang - 1)) / 2
-
     # Record correspondences
     for lA, lB in progressbar(combinations(lex.cols, r=2), total=tot_pairs):
         for idxA, idxB in lex.pairs[lA, lB]:
             tokensA = list(iter_phonemes(lex[idxA, 'tokens']))
             tokensB = list(iter_phonemes(lex[idxB, 'tokens']))
-            langA, langB = lex[idxA, 'doculect'], lex[idxB, 'doculect']
+            langA, langB = lex[idxA, 'glottolog'], lex[idxB, 'glottolog']
             # classesA, classesB = lex[idxA, 'classes'], lex[idxB, 'classes']
 
             # check for edit dist == 1giot
@@ -158,11 +190,11 @@ def run(args):
                         soundB = sound_class[soundB]
                         try:
                             G[soundA][soundB]['frequency'][(langA, langB)] += 1
-                        except:
+                        except KeyError:
                             G.add_edge(soundA, soundB,
                                        frequency=Counter({(langA, langB): 1}))
 
-    # Filter out rare correspondences, compute metrics
+    args.log.info('Filtering out rare corresps...')
     del_edges = []
     for nA, nB, data in G.edges(data=True):
         for lA, lB in list(data['frequency']):
@@ -178,8 +210,6 @@ def run(args):
             data['weight'] = data['num pairs'] / tot_pairs
     G.remove_edges_from(del_edges)
 
-    for n in G.nodes():
-        G.node[n]['total freq'] = sum(G.node[n]['frequency'].values())
     #
     # table = []
     # for nA, nB, data in sorted(G.edges(data=True), key=lambda x: x[2]['weight'],
@@ -193,23 +223,39 @@ def run(args):
     #                    data['total freq'], data['num pairs'],
     #                    data['weight']]]
 
-    # Show graph
-    pos = nx.spring_layout(G, k=0.3, iterations=60)
-    weights = [G[u][v]['weight'] * 50 for u, v in G.edges()]
-    nx.draw(G, pos=pos, with_labels=True, width=weights, node_color="#45aaf2",
-            node_size=500)
-    plt.show()
+    output_prefix = "{dataset}_{cutoff}occ_{threshold}cols_{model}".format(
+        **vars(args))
 
-    # Compute matrix
+    # Show graph
+    pos = nx.spring_layout(G, iterations=60)
+    weights = [G[u][v]['weight'] * 50 for u, v in G.edges()]
+    nx.draw(G, pos=pos, with_labels=True,
+            width=weights, node_color="#45aaf2",
+            node_size=500)
+    plt.savefig(output_prefix+"_graph.png",  bbox_inches="tight", pad_inches=0.1)
+
+
+    # Output genus level info
     matrix = sound_corresp_matrix(G, attr="total freq")
-    with open('{}_{}occ_{}cols_{}_matrix.csv'.format(args.dataset, args.cutoff,
-                                                     args.threshold,
-                                                     args.model), 'w',
-              newline='') as csvfile:
+    with open(output_prefix + '_matrix.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(list(G.nodes()) + ["freq"])
+        writer.writerow(list(G.nodes()))
         for r in matrix:
             writer.writerow(r)
+
+    # Output genus level info
+    with open(output_prefix + '_results.csv', 'w', encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerow(["Genus","Sound A","Sound B", "Availability", "Freq"])
+        for genus in available:
+            for a, b in available[genus]:
+                try:
+                    langs = G[a][b]["frequency"]
+                    freq = sum([1 for lg1,lg2 in langs
+                                if genera[lg1] == genus and genera[lg2] == genus])
+                except KeyError:
+                    freq = 0
+                writer.writerow([genus, a, b, "True", freq])
 
     # with Table(
     #         args,

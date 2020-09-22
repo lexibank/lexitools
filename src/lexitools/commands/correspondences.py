@@ -248,7 +248,7 @@ def run(args):
         for genus in available:
             for a, b in available[genus]:
                 try:
-                    langs = G[a][b]["frequency"]
+                    langs = [lg_pair for lg_pair in G[a][b]["frequency"] if data.lang_to_genera[lg_pair[0]] == genus]
                     freq = len(langs)
                 except KeyError:
                     freq = 0

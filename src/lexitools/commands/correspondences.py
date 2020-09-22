@@ -172,14 +172,15 @@ def run(args):
         for idxA, idxB in lex.pairs[lA, lB]:
             tokensA = list(iter_phonemes(lex[idxA, 'tokens']))
             tokensB = list(iter_phonemes(lex[idxB, 'tokens']))
+
             langA, langB = lex[idxA, 'glottolog'], lex[idxB, 'glottolog']
             # classesA, classesB = lex[idxA, 'classes'], lex[idxB, 'classes']
 
-            # check for edit dist == 1giot
-            token_strs = ' '.join(tokensA), ' '.join(tokensB)
-            potential_corresp = lingpy.edit_dist(*token_strs) <= args.threshold
+            mapped_tokA = [sound_class[s] for s in tokensA]
+            mapped_tokB = [sound_class[s] for s in tokensB]
+            potential_corresp = lingpy.edit_dist(mapped_tokA, mapped_tokB) <= args.threshold
             if potential_corresp:
-                pair = lingpy.Pairwise(*token_strs)
+                pair = lingpy.Pairwise(' '.join(tokensA), ' '.join(tokensB))
                 pair.align()
                 almA, almB, sim = pair.alignments[0]
                 for sound_pair in zip(almA, almB):

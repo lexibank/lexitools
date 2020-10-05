@@ -98,18 +98,19 @@ def read_extended_wordlist_data(dataset, bipa):
 
 
 def get_inventories(dataset, bipa):
-    inv = defaultdict(set)
+    inv = defaultdict(lambda: defaultdict(set))
 
     # Get mapping from language_id to glottocode
     langmap = {row["ID"]: row["Glottocode"] for row in dataset["LanguageTable"]}
 
     # Extract inventories
+    # TODO: allow to add UnknownSound
     if dataset.module == "StructureDataset":
         # Inventory collections
         for row in list(dataset["ValueTable"]):
             sound = bipa[row["Value"]]
             if not isinstance(sound, pyclts.models.UnknownSound):
-                inv[langmap[row["Language_ID"]]].add(str(sound))
+                inv[langmap[row["Language_ID"]]][row["Language_ID"]].add(str(sound))
     elif dataset.module == "Wordlist":
         # Lexibank datasets
         data = read_extended_wordlist_data(dataset, bipa)
@@ -123,6 +124,13 @@ def get_inventories(dataset, bipa):
         }
 
         inv = {language: list(counter) for language, counter in phoneme_count.items()}
+
+    import pprint
+    pprint.pprint(inv)
+    print("===", dataset)
+
+    input()
+
 
     return inv
 

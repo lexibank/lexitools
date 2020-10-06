@@ -16,6 +16,7 @@ from cldfbench.cli_util import add_catalog_spec
 from pylexibank.cli_util import add_dataset_spec
 import pycldf.dataset
 
+from clldutils.clilib import Table, add_format
 
 def register(parser):
     """
@@ -28,12 +29,16 @@ def register(parser):
     add_catalog_spec(parser, "clts")
     add_catalog_spec(parser, "glottolog")
 
+    # Require a dataset as argument for the command:
+    add_dataset_spec(parser)
+    add_format(parser, default='pipe')
+
     # Datasets for comparison
-    parser.add_argument("ds1", type=str, help="Entry point for Dataset 1")
-    parser.add_argument("ds2", type=str, help="Entry point for Dataset 2")
+#    parser.add_argument("ds1", type=str, help="Entry point for Dataset 1")
+#    parser.add_argument("ds2", type=str, help="Entry point for Dataset 2")
 
     # Results
-    parser.add_argument("output", type=str, help="Output file")
+#    parser.add_argument("output", type=str, help="Output file")
 
 
 # Get a dictionary of glottocodes/IDs for comparison
@@ -135,7 +140,7 @@ def get_inventories(dataset, bipa):
     return inv
 
 
-def run(args):
+def old_run(args):
     """
     Entry point for command-line call.
     """
@@ -309,3 +314,21 @@ def run(args):
 
             handler.write("\t".join(buf))
             handler.write("\n")
+
+def run(args):
+    """
+    Entry point for command-line call.
+    """
+
+    # Instantiate BIPA and Glottolog
+    args.log.info("Instantiating CLTS and Glottolog...")
+    bipa = pyclts.CLTS(args.clts.dir).bipa
+    glottolog = pyglottolog.Glottolog(args.glottolog.dir)
+
+    # TODO: load properly, without `cldf_reader()`
+    args.log.info("Loading dataset...")
+    ds= get_dataset(args.dataset).cldf_reader()
+
+    print(dir(ds))
+
+    print(ds.tables)

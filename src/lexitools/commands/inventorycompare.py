@@ -5,6 +5,7 @@ Run a phonological inventory comparison.
 from itertools import chain
 from collections import defaultdict, Counter
 import pathlib
+import csv
 
 # Import MPI-SHH libraries
 import pyclts
@@ -17,6 +18,7 @@ from pylexibank.cli_util import add_dataset_spec
 import pycldf.dataset
 
 from clldutils.clilib import Table, add_format
+
 
 def register(parser):
     """
@@ -31,289 +33,145 @@ def register(parser):
 
     # Require a dataset as argument for the command:
     add_dataset_spec(parser)
-    add_format(parser, default='pipe')
+    add_format(parser, default="pipe")
 
     # Datasets for comparison
+
+
 #    parser.add_argument("ds1", type=str, help="Entry point for Dataset 1")
 #    parser.add_argument("ds2", type=str, help="Entry point for Dataset 2")
 
-    # Results
+# Results
 #    parser.add_argument("output", type=str, help="Output file")
 
 
-# Get a dictionary of glottocodes/IDs for comparison
-# NOTE: will fail if there is more than one ID for the same glottocode
-def get_glottocodes(dataset):
-    return {entry["Glottocode"]: entry["ID"] for entry in dataset["LanguageTable"]
-            if entry['Glottocode']}
+def jac(a, b):
+    return len(set(a).intersection(set(b))) / len(set(a).union(set(b)))
 
 
-# TODO: add flag for stripping tones
-def lexeme2phonemes(lexeme, bipa, **kwargs):
-    """
-    Given a segment string, return it as a list of phonemes.
+def non_clts_comparison(inv_a, inv_b, name_a, name_b, prefix=None):
+    # Set prefix and separator, if any
+    if prefix:
+        prefix = f"{prefix}_"
+    else:
+        prefix = ""
 
-    Parameters
-    ----------
-    bipa : BIPA object
-        CLTS object for grapheme normalization
-    keep_mark : bool
-        Whether to keep markers (default: remove)
-    """
+    # Get common sounds
+    common = [snd for snd in inv_a if snd in inv_b]
 
-    # Parse flags for phoneme processing
-    keep_mark = kwargs.get("keep_mark", False)
+    # Build output, computing what is necessary
+    column = {}
+    column[f"{prefix}size_{name_a}"] = len(inv_a)
+    column[f"{prefix}size_{name_b}"] = len(inv_b)
+    column[f"{prefix}inv_{name_a}"] = " ".join(inv_a)
+    column[f"{prefix}inv_{name_b}"] = " ".join(inv_b)
+    column[f"{prefix}shared"] = " ".join(common)
+    column[f"{prefix}size_shared"] = len(common)
+    column[f"{prefix}strict"] = jac(inv_a, inv_b)
+    column[f"{prefix}exclusive_{name_a}"] = " ".join(
+        [snd for snd in inv_a if snd not in common]
+    )
+    column[f"{prefix}exclusive_{name_b}"] = " ".join(
+        [snd for snd in inv_b if snd not in common]
+    )
 
-    # Perform all processing
-    phonemes = [
-        str(bipa[phoneme])
-        for phoneme in lexeme
-        if not isinstance(bipa[phoneme], pyclts.models.UnknownSound)
-    ]
+    return column
 
-    if not keep_mark:
-        phonemes = [phoneme for phoneme in phonemes if phoneme not in ["+", "_"]]
+def clts_comparison(inv_a, inv_b, name_a, name_b, prefix=None):
+    # Set prefix and separator, if any
+    if prefix:
+        prefix = f"{prefix}_"
+    else:
+        prefix = ""
 
-    return phonemes
+    column = {}
 
+    # get counts
+    inv_a_cons = len(inv_a.sounds["consonant"])
+    inv_a_vowl = len(inv_a.sounds["vowel"])
+    inv_b_cons = len(inv_b.sounds["consonant"])
+    inv_b_vowl = len(inv_b.sounds["vowel"])
+    column[f"{prefix}size_{name_a}_all"] = inv_a_cons + inv_a_vowl
+    column[f"{prefix}size_{name_b}_all"] = inv_b_cons + inv_b_vowl
+    column[f"{prefix}size_{name_a}_cons"] = inv_a_cons
+    column[f"{prefix}size_{name_b}_cons"] = inv_b_cons
+    column[f"{prefix}size_{name_a}_vowl"] = inv_a_vowl
+    column[f"{prefix}size_{name_b}_vowl"] = inv_b_vowl
 
-def read_extended_wordlist_data(dataset, bipa):
-    """
-    Reads phonemes and syllables from a dataset.
-    """
-
-    # Collect data; for the time being only Language_ID (for grouping)
-    # and Segments. No other variable is taken into account, particularly
-    # the concept, which in the future could be used for matters like
-    # phonotactics
-    data = []
-    for row in list(dataset["FormTable"]):
-        phonemes = lexeme2phonemes(row["Segments"], bipa)
-
-        data.append(
-            {
-                "Language_ID": row["Language_ID"],
-                "Segments": row["Segments"],
-                "Phonemes": phonemes,
-                "Phoneme_Length": len(phonemes),
-            }
+    # compute similarities
+    aspect_groups = {
+        "all": None,
+        "consonant": ["consonant"],
+        "vowel": ["vowel"],
+    }
+    for aspect_label, aspects in aspect_groups.items():
+        column[f"{prefix}strict-{aspect_label}"] = inv_a.similar(
+            inv_b, metric="strict", aspects=aspects
+        )
+        column[f"{prefix}appr-{name_a}-{name_b}-{aspect_label}"] = inv_a.similar(
+            inv_b, metric="approximate", aspects=aspects
+        )
+        column[f"{prefix}appr-{name_b}-{name_a}-{aspect_label}"] = inv_b.similar(
+            inv_a, metric="approximate", aspects=aspects
         )
 
-    return data
+    # Collect consonants, vowels from both inventories, for overlap
+    sounds_a = {
+        aspect: sorted(list(inv_a.sounds[aspect])) for aspect in ["consonant", "vowel"]
+    }
+    sounds_b = {
+        aspect: sorted(list(inv_b.sounds[aspect])) for aspect in ["consonant", "vowel"]
+    }
+    common_cons = [
+        cons for cons in sounds_a["consonant"] if cons in sounds_b["consonant"]
+    ]
+    common_vowl = [vowl for vowl in sounds_a["vowel"] if vowl in sounds_b["vowel"]]
+
+    column[f"{prefix}inv_{name_a}"] = " ".join(
+        sounds_a["consonant"] + sounds_a["vowel"]
+    )
+    column[f"{prefix}inv_{name_b}"] = " ".join(
+        sounds_b["consonant"] + sounds_b["vowel"]
+    )
+    column[f"{prefix}shared_cons"] = " ".join(common_cons)
+    column[f"{prefix}shared_vowl"] = " ".join(common_vowl)
+    column[f"{prefix}size_shared_cons"] = len(common_cons)
+    column[f"{prefix}size_shared_vowl"] = len(common_vowl)
+    column[f"{prefix}size_shared_all"] = len(common_cons) + len(common_vowl)
+    column[f"{prefix}exclusive_{name_a}_cons"] = " ".join(
+        [cons for cons in sounds_a["consonant"] if cons not in common_cons]
+    )
+    column[f"{prefix}exclusive_{name_b}_cons"] = " ".join(
+        [cons for cons in sounds_b["consonant"] if cons not in common_cons]
+    )
+    column[f"{prefix}exclusive_{name_a}_vowl"] = " ".join(
+        [vowl for vowl in sounds_a["vowel"] if vowl not in common_vowl]
+    )
+    column[f"{prefix}exclusive_{name_b}_vowl"] = " ".join(
+        [vowl for vowl in sounds_b["vowel"] if vowl not in common_vowl]
+    )
+
+    return column
 
 
-def get_inventories(dataset, bipa):
-    inv = defaultdict(lambda: defaultdict(set))
+def collect_inventories(dataset, inventory_list, parameter_map):
+    # Collect raw/unicode/clts for all relevant inventories
+    to_collect = []
+    for catalog in inventory_list.keys():
+        to_collect += list(chain.from_iterable(inventory_list[catalog].values()))
 
-    # Get mapping from language_id to glottocode
-    langmap = {row["ID"]: row["Glottocode"] for row in dataset["LanguageTable"]}
+    values = defaultdict(list)
+    for row in dataset["ValueTable"]:
+        if row["Contribution_ID"] in to_collect:
+            values[row["Contribution_ID"]].append(
+                {
+                    "raw": row["Value"],
+                    "unicode": parameter_map[row["Parameter_ID"]]["unicode"],
+                    "bipa": parameter_map[row["Parameter_ID"]]["bipa"],
+                }
+            )
 
-    # Extract inventories
-    # TODO: allow to add UnknownSound
-    if dataset.module == "StructureDataset":
-        # Inventory collections
-        for row in list(dataset["ValueTable"]):
-            sound = bipa[row["Value"]]
-            if not isinstance(sound, pyclts.models.UnknownSound):
-                inv[langmap[row["Language_ID"]]][row["Language_ID"]].add(str(sound))
-    elif dataset.module == "Wordlist":
-        # Lexibank datasets
-        data = read_extended_wordlist_data(dataset, bipa)
-        vocabularies = defaultdict(list)
-        for entry in data:
-            vocabularies[langmap[entry["Language_ID"]]].append(entry["Phonemes"])
-
-        phoneme_count = {
-            language: Counter(chain.from_iterable(lexemes))
-            for language, lexemes in vocabularies.items()
-        }
-
-        inv = {language: list(counter) for language, counter in phoneme_count.items()}
-
-    import pprint
-    pprint.pprint(inv)
-    print("===", dataset)
-
-    input()
-
-
-    return inv
-
-
-def old_run(args):
-    """
-    Entry point for command-line call.
-    """
-
-    # Instantiate BIPA and Glottolog
-    bipa = pyclts.CLTS(args.clts.dir).bipa
-    glottolog = pyglottolog.Glottolog(args.glottolog.dir)
-
-    # Get dataset readers; as `get_dataset()` does not accept metadata files,
-    # we check the arguments and load with `pycldf` if that is the case
-    # TODO: deal with lexibank datasets, computing the inventories
-    args.log.info("Loading CLDF datasets...")
-    ds1_path = pathlib.Path(args.ds1).resolve()
-    ds2_path = pathlib.Path(args.ds2).resolve()
-    if ds1_path.name.endswith("-metadata.json"):
-        ds1 = pycldf.dataset.StructureDataset.from_metadata(ds1_path)
-    else:
-        ds1 = get_dataset(args.ds1).cldf_reader()
-
-    if ds2_path.name.endswith("-metadata.json"):
-        ds2 = pycldf.dataset.StructureDataset.from_metadata(ds2_path)
-    else:
-        ds2 = get_dataset(args.ds2).cldf_reader()
-
-    ds1_name = ds1.metadata_dict["rdf:ID"].upper()
-    ds2_name = ds2.metadata_dict["rdf:ID"].upper()
-
-    # Get glottocodes/IDs for comparison
-    lang1 = get_glottocodes(ds1)
-    args.log.info(f"Dataset #1 has {len(lang1)} languages.")
-    lang2 = get_glottocodes(ds2)
-    args.log.info(f"Dataset #2 has {len(lang2)} languages.")
-
-    # Get inventoris by ids
-    invs1 = get_inventories(ds1, bipa)
-    invs2 = get_inventories(ds2, bipa)
-
-    # Get overlapping glottocodes
-    overlap = [glottocode for glottocode in invs1 if glottocode and glottocode in invs2]
-    args.log.info(f"There are {len(overlap)} overlapping glottocodes.")
-
-    # Compare all overlapping glottocodes
-    with open(args.output, "w") as handler:
-        header = [
-            "Glottocode",
-            "Language",
-            f"Size_{ds1_name}_ALL",
-            f"Size_{ds2_name}_ALL",
-            f"Size_{ds1_name}_C",
-            f"Size_{ds2_name}_C",
-            f"Size_{ds1_name}_V",
-            f"Size_{ds2_name}_V",
-            "Strict_Similarity_ALL",
-            f"Approx_Similarity_{ds1_name}_ALL",
-            f"Approx_Similarity_{ds2_name}_ALL",
-            "Strict_Similarity_C",
-            f"Approx_Similarity_{ds1_name}_C",
-            f"Approx_Similarity_{ds2_name}_C",
-            "Strict_Similarity_V",
-            f"Approx_Similarity_{ds1_name}_V",
-            f"Approx_Similarity_{ds2_name}_V",
-            f"Inventory_{ds1_name}_Full",
-            f"Inventory_{ds2_name}_Full",
-            "Shared_Consonants",
-            "Shared_Vowels",
-            f"Exclusive_{ds1_name}_Consonants",
-            f"Exclusive_{ds1_name}_Vowels",
-            f"Exclusive_{ds2_name}_Consonants",
-            f"Exclusive_{ds2_name}_Vowels",
-        ]
-        handler.write("\t".join(header))
-        handler.write("\n")
-
-        for glottocode in sorted(overlap):
-            args.log.info("Comparing inventories for glottocode `%s`...", glottocode)
-            lang1_id, lang2_id = glottocode, glottocode
-            inv1 = Inventory.from_list(*list(invs1[lang1_id]), clts=bipa)
-            inv2 = Inventory.from_list(*list(invs2[lang2_id]), clts=bipa)
-
-            similarity = {}
-            for aspect_label in ["all", "consonant", "vowel", "tone"]:
-                if aspect_label == "all":
-                    aspects = ["consonant", "vowel", "tone"]
-                else:
-                    aspects = [aspect_label]
-
-                try:
-                    similarity[f"strict-{aspect_label}"] = "%.4f" % inv1.similar(
-                        inv2, metric="strict", aspects=aspects
-                    )
-                except:
-                    similarity[f"strict-{aspect_label}"] = ""
-
-                try:
-                    similarity[f"appr12-{aspect_label}"] = "%.4f" % inv1.similar(
-                        inv2, metric="similarity", aspects=aspects
-                    )
-                except:
-                    similarity[f"appr12-{aspect_label}"] = ""
-
-                try:
-                    similarity[f"appr21-{aspect_label}"] = "%.4f" % inv2.similar(
-                        inv1, metric="similarity", aspects=aspects
-                    )
-                except:
-                    similarity[f"appr21-{aspect_label}"] = ""
-
-            # Collect consonants, vowels, and tones for both inventories
-            # NOTE: already sorting here
-            sounds1 = {
-                aspect: sorted(list(inv1.sounds[aspect]))
-                for aspect in ["consonant", "vowel", "tone"]
-            }
-            sounds2 = {
-                aspect: sorted(list(inv2.sounds[aspect]))
-                for aspect in ["consonant", "vowel", "tone"]
-            }
-
-            # get counts
-            inv1_cons = len(inv1.sounds["consonant"])
-            inv1_vowl = len(inv1.sounds["vowel"])
-            inv2_cons = len(inv2.sounds["consonant"])
-            inv2_vowl = len(inv2.sounds["vowel"])
-
-            # build buffer
-            buf = [
-                glottocode,
-                glottolog.languoid(glottocode).name,
-                str(inv1_cons + inv1_vowl),
-                str(inv2_cons + inv2_vowl),
-                str(inv1_cons),
-                str(inv2_cons),
-                str(inv1_vowl),
-                str(inv2_vowl),
-                similarity["strict-all"],
-                similarity["appr12-all"],
-                similarity["appr21-all"],
-                similarity["strict-consonant"],
-                similarity["appr12-consonant"],
-                similarity["appr21-consonant"],
-                similarity["strict-vowel"],
-                similarity["appr12-vowel"],
-                similarity["appr21-vowel"],
-                " ".join(sounds1["consonant"] + sounds1["vowel"]),
-                " ".join(sounds2["consonant"] + sounds2["vowel"]),
-                " ".join(
-                    [snd for snd in sounds1["consonant"] if snd in sounds2["consonant"]]
-                ),
-                " ".join([snd for snd in sounds1["vowel"] if snd in sounds2["vowel"]]),
-                " ".join(
-                    [
-                        snd
-                        for snd in sounds1["consonant"]
-                        if snd not in sounds2["consonant"]
-                    ]
-                ),
-                " ".join(
-                    [snd for snd in sounds1["vowel"] if snd not in sounds2["vowel"]]
-                ),
-                " ".join(
-                    [
-                        snd
-                        for snd in sounds2["consonant"]
-                        if snd not in sounds1["consonant"]
-                    ]
-                ),
-                " ".join(
-                    [snd for snd in sounds2["vowel"] if snd not in sounds1["vowel"]]
-                ),
-            ]
-
-            handler.write("\t".join(buf))
-            handler.write("\n")
+    return values
 
 def run(args):
     """
@@ -327,8 +185,72 @@ def run(args):
 
     # TODO: load properly, without `cldf_reader()`
     args.log.info("Loading dataset...")
-    ds= get_dataset(args.dataset).cldf_reader()
+    ds = get_dataset(args.dataset).cldf_reader()
 
-    print(dir(ds))
+    # Collect mapping of language ids to glottocodes
+    glottocode_map = {row["ID"]: row["Glottocode"] for row in ds["LanguageTable"]}
 
-    print(ds.tables)
+    # Collect parameters, which include unicode and bipa
+    parameter_map = {
+        row["ID"]: {"unicode": row["Name"], "bipa": row["BIPA"]}
+        for row in ds["ParameterTable"]
+    }
+
+    catalog_a = "depi"
+    catalog_b = "phoibleea"
+
+    # Collect all contribution IDs mapped to a given glottocode
+    inventories = defaultdict(lambda: defaultdict(set))
+    for row in ds["ValueTable"]:
+        if row["Catalog"] in [catalog_a, catalog_b]:
+            glottocode = glottocode_map.get(row["Language_ID"])
+            if glottocode:
+                inventories[row["Catalog"]][glottocode].add(row["Contribution_ID"])
+
+    values = collect_inventories(ds, inventories, parameter_map)
+
+    # Get glottocodes in common
+    glottocodes_a = list(inventories[catalog_a].keys())
+    glottocodes_b = list(inventories[catalog_b].keys())
+    glottocodes_common = [
+        glottocode for glottocode in glottocodes_a if glottocode in glottocodes_b
+    ]
+
+    # Get comparable inventories per glottocode
+    output = []
+    for glottocode in sorted(glottocodes_common):
+        # TODO: check for more than one inventory
+        inventory_a = list(inventories[catalog_a][glottocode])[0]
+        inventory_b = list(inventories[catalog_b][glottocode])[0]
+
+        # Extract values and build raw/unicode/bipa lists; we take sets of
+        # unicode and clts, as we might have repeated items due to conversion
+        values_a = values[inventory_a]
+        values_b = values[inventory_b]
+
+        raw_a = sorted([entry['raw'] for entry in values_a])
+        raw_b = sorted([entry['raw'] for entry in values_b])
+        unicode_a = sorted(set([entry['unicode'] for entry in values_a]))
+        unicode_b = sorted(set([entry['unicode'] for entry in values_b]))
+        bipa_a = sorted(set([entry['bipa'] for entry in values_a if entry['bipa']]))
+        bipa_b = sorted(set([entry['bipa'] for entry in values_b if entry['bipa']]))
+
+        # Build output
+        row = {'glottocode':glottocode}
+        row.update(non_clts_comparison(raw_a, raw_b, catalog_a, catalog_b, "raw"))
+        row.update(non_clts_comparison(unicode_a, unicode_b, catalog_a, catalog_b, "unicode"))
+
+        clts_inv_a = Inventory.from_list(*bipa_a, clts=bipa)
+        clts_inv_b = Inventory.from_list(*bipa_b, clts=bipa)
+        row.update(clts_comparison(clts_inv_a, clts_inv_b, catalog_a, catalog_b, "bipa"))
+
+        output.append(row)
+
+    # write results
+    filename = f"results_{catalog_a}-{catalog_b}.tsv"
+    args.log.info(f"Writing results to `{filename}`...")
+    with open(filename, "w") as tsvfile:
+        fieldnames = list(output[0].keys())
+        writer = csv.DictWriter(tsvfile, delimiter="\t", fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(output)

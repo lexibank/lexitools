@@ -2,22 +2,17 @@
 Run a phonological inventory comparison.
 """
 
-from itertools import chain
-from collections import defaultdict, Counter
-import pathlib
+import itertools
+from collections import defaultdict
 import csv
 
 # Import MPI-SHH libraries
 import pyclts
 import pyglottolog
 from pyclts.inventories import Inventory
-from clldutils.clilib import PathType
 from cldfbench import get_dataset
 from cldfbench.cli_util import add_catalog_spec
 from pylexibank.cli_util import add_dataset_spec
-import pycldf.dataset
-
-from clldutils.clilib import Table, add_format
 
 
 def register(parser):
@@ -33,23 +28,28 @@ def register(parser):
 
     # Require a dataset as argument for the command:
     add_dataset_spec(parser)
-    add_format(parser, default="pipe")
-
-    # Datasets for comparison
 
 
-#    parser.add_argument("ds1", type=str, help="Entry point for Dataset 1")
-#    parser.add_argument("ds2", type=str, help="Entry point for Dataset 2")
+def jac(set_a, set_b):
+    """
+    Compute the Jaccard Index.
+    """
 
-# Results
-#    parser.add_argument("output", type=str, help="Output file")
+    if len(set_a) == 0 or len(set_b) == 0:
+        index = 0
+    else:
+        index = len(set(set_a).intersection(set(set_b))) / len(
+            set(set_a).union(set(set_b))
+        )
 
-
-def jac(a, b):
-    return len(set(a).intersection(set(b))) / len(set(a).union(set(b)))
+    return index
 
 
 def non_clts_comparison(inv_a, inv_b, name_a, name_b, prefix=None):
+    """
+    Collect info for non-BIPA inventories.
+    """
+
     # Set prefix and separator, if any
     if prefix:
         prefix = f"{prefix}_"
@@ -77,7 +77,12 @@ def non_clts_comparison(inv_a, inv_b, name_a, name_b, prefix=None):
 
     return column
 
+
 def clts_comparison(inv_a, inv_b, name_a, name_b, prefix=None):
+    """
+    Collect info for BIPA inventories.
+    """
+
     # Set prefix and separator, if any
     if prefix:
         prefix = f"{prefix}_"
@@ -99,11 +104,7 @@ def clts_comparison(inv_a, inv_b, name_a, name_b, prefix=None):
     column[f"{prefix}size_{name_b}_vowl"] = inv_b_vowl
 
     # compute similarities
-    aspect_groups = {
-        "all": None,
-        "consonant": ["consonant"],
-        "vowel": ["vowel"],
-    }
+    aspect_groups = {"all": None, "consonant": ["consonant"], "vowel": ["vowel"]}
     for aspect_label, aspects in aspect_groups.items():
         column[f"{prefix}strict-{aspect_label}"] = inv_a.similar(
             inv_b, metric="strict", aspects=aspects
@@ -154,11 +155,17 @@ def clts_comparison(inv_a, inv_b, name_a, name_b, prefix=None):
     return column
 
 
-def collect_inventories(dataset, inventory_list, parameter_map):
+def collect_inventory_values(dataset, inventory_list, parameter_map):
+    """
+    Collect inventories from a dataset.
+    """
+
     # Collect raw/unicode/clts for all relevant inventories
     to_collect = []
     for catalog in inventory_list.keys():
-        to_collect += list(chain.from_iterable(inventory_list[catalog].values()))
+        to_collect += list(
+            itertools.chain.from_iterable(inventory_list[catalog].values())
+        )
 
     values = defaultdict(list)
     for row in dataset["ValueTable"]:
@@ -173,6 +180,58 @@ def collect_inventories(dataset, inventory_list, parameter_map):
 
     return values
 
+
+def collect_results(values_a, values_b, catalog_a, catalog_b, glottocode, bipa):
+    """
+    Collect raw, unicode, and bipa comparison values for output.
+    """
+
+    output_row = {"glottocode": glottocode}
+
+    # Single-pass collection of all entries would be faster
+    raw_a = sorted([entry["raw"] for entry in values_a])
+    raw_b = sorted([entry["raw"] for entry in values_b])
+    unicode_a = sorted({entry["unicode"] for entry in values_a})
+    unicode_b = sorted({entry["unicode"] for entry in values_b})
+    bipa_a = sorted({entry["bipa"] for entry in values_a if entry["bipa"]})
+    bipa_b = sorted({entry["bipa"] for entry in values_b if entry["bipa"]})
+
+    # Build output
+    output_row.update(non_clts_comparison(raw_a, raw_b, catalog_a, catalog_b, "raw"))
+    output_row.update(
+        non_clts_comparison(unicode_a, unicode_b, catalog_a, catalog_b, "unicode")
+    )
+
+    clts_inv_a = Inventory.from_list(*bipa_a, clts=bipa)
+    clts_inv_b = Inventory.from_list(*bipa_b, clts=bipa)
+    output_row.update(
+        clts_comparison(clts_inv_a, clts_inv_b, catalog_a, catalog_b, "bipa")
+    )
+
+    return output_row
+
+
+def write_output(output_rows, catalog_a, catalog_b):
+    """
+    Write results for a pairwise catalog comparison.
+    """
+
+    first_fields = ["glottocode", "language"]
+
+    filename = f"output/results_{catalog_a}-{catalog_b}.tsv"
+    with open(filename, "w") as tsvfile:
+        # Get fieldnames, making sure glottolog info comes firts
+        fieldnames = list(output_rows[0].keys())
+        fieldnames = first_fields + [
+            field for field in fieldnames if field not in first_fields
+        ]
+
+        # Write results
+        writer = csv.DictWriter(tsvfile, delimiter="\t", fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(output_rows)
+
+
 def run(args):
     """
     Entry point for command-line call.
@@ -183,9 +242,12 @@ def run(args):
     bipa = pyclts.CLTS(args.clts.dir).bipa
     glottolog = pyglottolog.Glottolog(args.glottolog.dir)
 
-    # TODO: load properly, without `cldf_reader()`
     args.log.info("Loading dataset...")
     ds = get_dataset(args.dataset).cldf_reader()
+
+    # Collect list of catalogs for the comparison
+    # TODO: allow to set from command-line
+    catalogs = sorted({row["Catalog"] for row in ds["ValueTable"]})
 
     # Collect mapping of language ids to glottocodes
     glottocode_map = {row["ID"]: row["Glottocode"] for row in ds["LanguageTable"]}
@@ -196,61 +258,48 @@ def run(args):
         for row in ds["ParameterTable"]
     }
 
-    catalog_a = "depi"
-    catalog_b = "phoibleea"
-
     # Collect all contribution IDs mapped to a given glottocode
     inventories = defaultdict(lambda: defaultdict(set))
     for row in ds["ValueTable"]:
-        if row["Catalog"] in [catalog_a, catalog_b]:
+        if row["Catalog"] in catalogs:
             glottocode = glottocode_map.get(row["Language_ID"])
             if glottocode:
                 inventories[row["Catalog"]][glottocode].add(row["Contribution_ID"])
 
-    values = collect_inventories(ds, inventories, parameter_map)
+    values = collect_inventory_values(ds, inventories, parameter_map)
 
-    # Get glottocodes in common
-    glottocodes_a = list(inventories[catalog_a].keys())
-    glottocodes_b = list(inventories[catalog_b].keys())
-    glottocodes_common = [
-        glottocode for glottocode in glottocodes_a if glottocode in glottocodes_b
-    ]
+    # Get a list of all glottocodes in common between all combinations
+    for catalog_a, catalog_b in itertools.combinations(catalogs, 2):
+        glottocodes_a = list(inventories[catalog_a].keys())
+        glottocodes_b = list(inventories[catalog_b].keys())
 
-    # Get comparable inventories per glottocode
-    output = []
-    for glottocode in sorted(glottocodes_common):
-        # TODO: check for more than one inventory
-        inventory_a = list(inventories[catalog_a][glottocode])[0]
-        inventory_b = list(inventories[catalog_b][glottocode])[0]
+        common = sorted(
+            [glottocode for glottocode in glottocodes_a if glottocode in glottocodes_b]
+        )
 
-        # Extract values and build raw/unicode/bipa lists; we take sets of
-        # unicode and clts, as we might have repeated items due to conversion
-        values_a = values[inventory_a]
-        values_b = values[inventory_b]
+        args.log.info(
+            f"Processing `{catalog_a}` and `{catalog_b}` ({len(common)} common codes)..."
+        )
 
-        raw_a = sorted([entry['raw'] for entry in values_a])
-        raw_b = sorted([entry['raw'] for entry in values_b])
-        unicode_a = sorted(set([entry['unicode'] for entry in values_a]))
-        unicode_b = sorted(set([entry['unicode'] for entry in values_b]))
-        bipa_a = sorted(set([entry['bipa'] for entry in values_a if entry['bipa']]))
-        bipa_b = sorted(set([entry['bipa'] for entry in values_b if entry['bipa']]))
+        output_rows = []
+        for glottocode in common:
+            # TODO: check for more than one inventory
+            inventory_a = list(inventories[catalog_a][glottocode])[0]
+            inventory_b = list(inventories[catalog_b][glottocode])[0]
 
-        # Build output
-        row = {'glottocode':glottocode}
-        row.update(non_clts_comparison(raw_a, raw_b, catalog_a, catalog_b, "raw"))
-        row.update(non_clts_comparison(unicode_a, unicode_b, catalog_a, catalog_b, "unicode"))
+            # Extract values and build raw/unicode/bipa lists; we take sets of
+            # unicode and clts, as we might have repeated items due to conversion
+            values_a = values[inventory_a]
+            values_b = values[inventory_b]
 
-        clts_inv_a = Inventory.from_list(*bipa_a, clts=bipa)
-        clts_inv_b = Inventory.from_list(*bipa_b, clts=bipa)
-        row.update(clts_comparison(clts_inv_a, clts_inv_b, catalog_a, catalog_b, "bipa"))
+            # Collect row of output and add other info
+            output_row = collect_results(
+                values_a, values_b, catalog_a, catalog_b, glottocode, bipa
+            )
+            output_row["language"] = glottolog.languoid(glottocode).name
 
-        output.append(row)
+            output_rows.append(output_row)
 
-    # write results
-    filename = f"results_{catalog_a}-{catalog_b}.tsv"
-    args.log.info(f"Writing results to `{filename}`...")
-    with open(filename, "w") as tsvfile:
-        fieldnames = list(output[0].keys())
-        writer = csv.DictWriter(tsvfile, delimiter="\t", fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(output)
+        # write results
+        if output_rows:
+            write_output(output_rows, catalog_a, catalog_b)

@@ -181,12 +181,20 @@ def collect_inventory_values(dataset, inventory_list, parameter_map):
     return values
 
 
-def collect_results(values_a, values_b, catalog_a, catalog_b, glottocode, bipa):
+def collect_results(
+    values_a, values_b, catalog_a, catalog_b, inventory_a, inventory_b, glottocode, bipa
+):
     """
     Collect raw, unicode, and bipa comparison values for output.
     """
 
-    output_row = {"glottocode": glottocode}
+    output_row = {
+        "glottocode": glottocode,
+        "catalog_a": catalog_a,
+        "catalog_b": catalog_b,
+        "inventory_a": inventory_a,
+        "inventory_b": inventory_b,
+    }
 
     # Single-pass collection of all entries would be faster
     raw_a = sorted([entry["raw"] for entry in values_a])
@@ -232,6 +240,71 @@ def write_output(output_rows, catalog_a, catalog_b):
         writer.writerows(output_rows)
 
 
+def write_soundtable(values, inventories, glottolog):
+    """
+    Write a single table with all sounds.
+    """
+
+    # Collect all sounds in a single table, so we can check when there is a missing BIPA;
+    # This involves building an inverse inventory map
+    inv_inventory = {}
+    for catalog, inv_dict in inventories.items():
+        for glottocode, inv_list in inv_dict.items():
+            for inv_id in inv_list:
+                inv_inventory[inv_id] = glottocode
+
+    glottocodes = set()
+    rows = []
+    for inventory_id, sounds in values.items():
+        glottocode = inv_inventory.get(inventory_id, None)
+        glottocodes.add(glottocode)
+        catalog = inventory_id.split("_")[0]
+        for sound in sounds:
+            rows.append(
+                {
+                    "catalog": catalog,
+                    "inventory": inventory_id,
+                    "glottocode": glottocode,
+                    "raw": sound["raw"],
+                    "unicode": sound["unicode"],
+                    "bipa": sound["bipa"] if sound["bipa"] else "",
+                }
+            )
+
+    # cache language names
+    lang_names = {}
+    for languoid in glottolog.languoids():
+        if languoid.glottocode in glottocodes:
+            lang_names[languoid.glottocode] = languoid.name
+
+    # Add language names, sort, and output
+    for row in rows:
+        row["language"] = lang_names.get(row["glottocode"], "")
+        t = (row["catalog"], row["language"], row["bipa"], row["unicode"])
+        if None in t:
+            print(row)
+    rows = sorted(
+        rows, key=lambda r: (r["catalog"], r["language"], r["bipa"], r["unicode"])
+    )
+
+    with open("output/sound-table.tsv", "w") as output:
+        writer = csv.DictWriter(
+            output,
+            delimiter="\t",
+            fieldnames=[
+                "catalog",
+                "language",
+                "inventory",
+                "glottocode",
+                "raw",
+                "unicode",
+                "bipa",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def run(args):
     """
     Entry point for command-line call.
@@ -268,8 +341,14 @@ def run(args):
 
     values = collect_inventory_values(ds, inventories, parameter_map)
 
+    # Write all sounds in a single table
+    args.log.info("Writing sound table...")
+    write_soundtable(values, inventories, glottolog)
+
+    return
+
     # Get a list of all glottocodes in common between all combinations
-    for catalog_a, catalog_b in itertools.combinations(catalogs, 2):
+    for catalog_a, catalog_b in itertools.combinations_with_replacement(catalogs, 2):
         glottocodes_a = list(inventories[catalog_a].keys())
         glottocodes_b = list(inventories[catalog_b].keys())
 
@@ -283,22 +362,41 @@ def run(args):
 
         output_rows = []
         for glottocode in common:
-            # TODO: check for more than one inventory
-            inventory_a = list(inventories[catalog_a][glottocode])[0]
-            inventory_b = list(inventories[catalog_b][glottocode])[0]
+            # If we are doing in-catalog comparison, we only compare glottocodes
+            # that have multiple inventories
+            if catalog_a == catalog_b:
+                catalog_inventories = inventories[catalog_a][glottocode]
+                if len(catalog_inventories) == 1:
+                    comparanda = []
+                else:
+                    comparanda = list(itertools.combinations(catalog_inventories, 2))
+            else:
+                # Grab all inventories
+                inventories_a = list(inventories[catalog_a][glottocode])
+                inventories_b = list(inventories[catalog_b][glottocode])
 
-            # Extract values and build raw/unicode/bipa lists; we take sets of
-            # unicode and clts, as we might have repeated items due to conversion
-            values_a = values[inventory_a]
-            values_b = values[inventory_b]
+                comparanda = list(itertools.product(inventories_a, inventories_b))
 
-            # Collect row of output and add other info
-            output_row = collect_results(
-                values_a, values_b, catalog_a, catalog_b, glottocode, bipa
-            )
-            output_row["language"] = glottolog.languoid(glottocode).name
+            for inventory_a, inventory_b in comparanda:
+                # Extract values and build raw/unicode/bipa lists; we take sets of
+                # unicode and clts, as we might have repeated items due to conversion
+                values_a = values[inventory_a]
+                values_b = values[inventory_b]
 
-            output_rows.append(output_row)
+                # Collect row of output and add other info
+                output_row = collect_results(
+                    values_a,
+                    values_b,
+                    catalog_a,
+                    catalog_b,
+                    inventory_a,
+                    inventory_b,
+                    glottocode,
+                    bipa,
+                )
+                output_row["language"] = glottolog.languoid(glottocode).name
+
+                output_rows.append(output_row)
 
         # write results
         if output_rows:

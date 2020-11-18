@@ -287,38 +287,42 @@ def run(args):
     langgenera_path = "./src/lexitools/commands/lang_genera-v1.0.0.tsv"
     clts = args.clts.from_config().api
     if args.model == "bipa":
-        def sound_class(sound_str):
-            system = clts.transcriptionsystem_dict[args.model]
-            return str(system.get(sound_str, sound_str))
+        def sound_class(sound):
+            sound_system = clts.transcriptionsystem_dict[args.model]
+            return str(sound_system[sound])
     else:
-        def sound_class(sound_str):
-            system = clts.soundclasses_dict[args.model]
-            return system.get(sound_str, sound_str)
-
-    sound_model = clts.transcriptionsystem(
-        "asjpcode" if args.model == "asjp" else args.model)
+        def sound_class(sound):
+            sound_system = clts.soundclasses_dict[args.model]
+            extras = {'cʃ': 'TS~', 'pʃ': 'pS~', 'pχʼ': 'p"X~',
+                      'd̪ʒ': 'j'}  # these are missing from the clts model
+            try:
+                return str(sound_system[sound])
+            except KeyError:
+                return extras[sound]
 
     ## This is a temporary fake "lexicore" interface
     if args.dataset == "lexicore":
-        dataset_list = ["aaleykusunda", "abrahammonpa", "allenbai",
-                        "backstromnorthernpakistan", "bdpa", "beidasinitic",
-                        "birchallchapacuran", "bodtkhobwa", "bowernpny", "cals",
+        dataset_list = ["aaleykusunda", "abrahammonpa", "allenbai", "bdpa",
+                        "beidasinitic", "birchallchapacuran",
+                        "blustaustronesian", "bodtkhobwa", "bowernpny", "cals",
                         "castrosui", "castroyi", "chaconarawakan",
                         "chaconbaniwa", "chaconcolumbian", "chenhmongmien",
-                        "chindialectsurvey", "clarkkimmun", "dravlex",
-                        "dunnaslian", "galuciotupi", "halenepal",
-                        "hantganbangime", "housinitic", "hsiuhmongmien",
-                        "hubercolumbian", "ivanisuansu", "joophonosemantic",
-                        "lieberherrkhobwa", "listcognatebenchmark",
-                        "liusinitic", "marrisonnaga", "mcelhanonhuon",
-                        "mitterhoferbena", "mortensentangkhulic",
-                        "naganorgyalrongic", "northeuralex", "robinsonap",
-                        "sagartst", "savelyevturkic", "sohartmannchin", "suntb",
-                        "tppsr", "transnewguineaorg", "tryonsolomon",
-                        "vanbikkukichin", "walworthpolynesian", "wangbai",
-                        "wichmannmixezoquean", "wold", "yanglalo",
-                        "zgraggenmadang", "gerarditupi", "polyglottaafricana",
-                        "peirosaustroasiatic", "deepadungpalaung", "zhaobai"]
+                        "chindialectsurvey", "davletshinaztecan",
+                        "deepadungpalaung", "dravlex", "dunnaslian",
+                        "dunnielex", "galuciotupi", "gerarditupi", "halenepal",
+                        "hantganbangime", "hattorijaponic", "houchinese",
+                        "hubercolumbian", "ivanisuansu",
+                        "johanssonsoundsymbolic", "joophonosemantic",
+                        "kesslersignificance", "kraftchadic", "leekoreanic",
+                        "lieberherrkhobwa", "lundgrenomagoa", "mannburmish",
+                        "marrisonnaga", "mcelhanonhuon", "mitterhoferbena",
+                        "naganorgyalrongic", "northeuralex",
+                        "peirosaustroasiatic", "pharaocoracholaztecan",
+                        "robinsonap", "sagartst", "savelyevturkic",
+                        "sohartmannchin", "starostinpie", "suntb",
+                        "transnewguineaorg", "tryonsolomon", "walkerarawakan",
+                        "walworthpolynesian", "wold", "yanglalo",
+                        "zgraggenmadang", "zhaobai", "zhivlovobugrian", ]
     else:
         dataset_list = [args.dataset]
 

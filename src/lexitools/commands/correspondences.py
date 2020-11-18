@@ -338,12 +338,13 @@ def run(args):
         len(data.genera_to_lang)))
 
     available = find_available(args, data)
+
     G = find_attested_corresps(args, data)
 
     now = time.strftime("%Y%m%d-%Hh%M")
 
     output_prefix = "{timestamp}_corresp_min_occ_{cutoff}_" \
-                    "min_sim_{threshold}_sounds_{model}_data_{dataset}".format(
+                    "min_sim_{threshold}_sounds_{model}_data_{dataset}_concepts_{concepts}".format(
         timestamp=now,
         **vars(args))
 

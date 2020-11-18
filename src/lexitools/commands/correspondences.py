@@ -68,15 +68,25 @@ class SoundCorrespsByGenera(object):
         langs = {}
         # this is less slow than calling .langoid(code) for each code
         langoids = glottolog.languoids_by_code()
+        self.genera_to_lang = defaultdict(set)
+        self.genera_to_family = {}
 
-        for row in db.iter_table("LanguageTable"):
+        for row in progressbar(db.iter_table("LanguageTable"),
+                               desc="listing languages"):
             family = row["Family"]
             gcode = row["Glottocode"]
+            if gcode is None or gcode not in self.lang_to_genera:
+                continue
             id = row["ID"]
             langoid = langoids.get(gcode, None)
             if langoid is not None and langoid.family is not None:
                 family = langoid.family.name
-            langs[id] = (gcode, family)
+
+            genus = self.lang_to_genera[gcode]
+            self.genera_to_lang[genus].add(gcode)
+            if genus not in self.genera_to_family:
+                self.genera_to_family[genus] = family
+            langs[id] = (gcode, family, genus)
 
         concepts = {row["ID"]: row["Concepticon_ID"] for row in
                     db.iter_table('ParameterTable')}
@@ -88,39 +98,28 @@ class SoundCorrespsByGenera(object):
             self.concepts_subset = {c.concepticon_id for c in
                                     concept_dict.values() if
                                     c.concepticon_id}
-        else:
-            self.concepts_subset = set(
-                concepts.values())  # All observed concepts
+        else:  # All observed concepts
+            self.concepts_subset = set(concepts.values())
 
-        self.genera_to_lang = defaultdict(set)
         self.lang_to_concept = defaultdict(set)
         self.tokens = defaultdict(list)
-        self.genera_to_family = {}
 
         for row in progressbar(db.iter_table('FormTable'),
                                desc="Loading data..."):
-
-            lang_id, family = langs[row["Language_ID"]]
-            # skip if it has no glottocode
-            # or no recognized glottocode,
-            # or no phonological information
-            if lang_id is None \
-                    or lang_id not in self.lang_to_genera \
-                    or row["Segments"] is None \
-                    or "".join(
-                [x for x in row["Segments"] if x is not None]) == "":
-                continue
-
             concept = concepts[row["Parameter_ID"]]
-            genus = self.lang_to_genera[lang_id]
-            token = list(self._iter_phonemes(row["Segments"]))
+            if concept not in self.concepts_subset or \
+                    row["Language_ID"] not in langs or row["Segments"] is None:
+                continue
+            try:
+                token = list(self._iter_phonemes(row["Segments"]))
+            except KeyError as e:
+                continue  # skip this token, it contains unknown sounds
+            if token == [""]: continue
 
-            if concept in self.concepts_subset:
-                self.genera_to_lang[genus].add(lang_id)
-                self.lang_to_concept[lang_id].add(concept)
-                self.tokens[(lang_id, concept)].append(token)
-                if genus not in self.genera_to_family:
-                    self.genera_to_family[genus] = family
+            gcode, family, genus = langs[row["Language_ID"]]
+            self.tokens[(gcode, concept)].append(token)
+            self.lang_to_concept[gcode].add(concept)
+
         self.concepts_intersection = []
         log.info(r"Total number of concepts kept: {}".format(
             len(self.concepts_subset)))

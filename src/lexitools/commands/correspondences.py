@@ -351,9 +351,8 @@ def run(args):
     # Output genus level info
     with open(output_prefix + '_results.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(
-            ["Family", "Genus", "Sound A", "Sound B", "Available", "Observed",
-             "A cat", "B cat"])
+        writer.writerow(["Family", "Genus", "Sound A",
+                         "Sound B", "Available", "Observed"])
         for a, b in available:
             occ_by_genus = Counter()
             if G.has_edge(a, b):
@@ -361,11 +360,9 @@ def run(args):
                     occ_by_genus[data.lang_to_genera[lA]] += \
                         G[a][b]["occurences"][(lA, lB)]
 
-            a_type = "null" if a == "-" else sound_model[a].type
-            b_type = "null" if b == "-" else sound_model[b].type
             for genus in available[(a, b)]:
                 writer.writerow([data.genera_to_family[genus], genus, a, b, 1,
-                                 occ_by_genus[genus], a_type, b_type])
+                                 occ_by_genus[genus]])
 
     with open(output_prefix + '_concepts_intersection.csv', 'w',
               encoding="utf-8") as csvfile:

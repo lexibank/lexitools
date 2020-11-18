@@ -42,6 +42,8 @@ class MockLexicore(object):
                                                   ep="lexibank.dataset").cldf_reader()
             except AttributeError:
                 print("Failed to load", name)
+        if not self.datasets:
+            raise Exception("No dataset loaded")
 
     def iter_table(self, table_name):
         for name, ds in self.datasets.items():

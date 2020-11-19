@@ -22,7 +22,7 @@ import time
 import subprocess
 from importlib.util import find_spec
 from cldfbench import get_dataset
-
+import sys
 
 class MockLexicore(object):
     """This is a mock to access the data without waiting on the Lexibank SQL project,
@@ -30,13 +30,15 @@ class MockLexicore(object):
 
     def __init__(self, dataset_list):
         # see https://github.com/chrzyki/snippets/blob/main/lexibank/install_datasets.py
-        egg_pattern = "git+https://github.com/lexibank/{name}.git#egg=lexibank_{name}"
-        for name in dataset_list:
+        egg_pattern = "git+https://github.com/{org}/{name}.git#egg=lexibank_{name}"
+        for org, name in dataset_list:
             if find_spec("lexibank_" + name) is None:
-                subprocess.run(
-                    ["pip", "install", "-e", egg_pattern.format(name=name)])
+                args = [sys.executable, "-m", "pip", "install",
+                        "-e", egg_pattern.format(org=org, name=name)]
+                subprocess.run(args)
+
         self.datasets = {}
-        for name in dataset_list:
+        for org, name in dataset_list:
             try:
                 self.datasets[name] = get_dataset(name,
                                                   ep="lexibank.dataset").cldf_reader()
@@ -246,7 +248,7 @@ def find_available(args, data):
     return available
 
 
-def find_attested_corresps(args, data):
+def find_attested_corresps(args, data, is_bipa=False):
     args.log.info('Counting attested corresp...')
     G = nx.Graph()
     ignore = "+*#_"
@@ -254,7 +256,11 @@ def find_attested_corresps(args, data):
         for (lA, tokensA), (lB, tokensB) in data.iter_candidate_pairs(genus):
             tokens = (' '.join(tokensA), ' '.join(tokensB))
             if lingpy.edit_dist(*tokens) <= args.threshold:
-                almA, almB, sim = lingpy.Pairwise(*tokens)() #lingpy.nw_align(*tokens)
+                if is_bipa:
+                    alignments = lingpy.Pairwise(*tokens)()
+                    almA, almB, sim = alignments[0] # Skipping any other alignments
+                else:
+                    almA, almB, sim = lingpy.nw_align(*tokens)
                 for sound_pair in zip(almA, almB):
                     soundA, soundB = sound_pair
                     if soundA not in ignore and \
@@ -301,29 +307,58 @@ def run(args):
 
     ## This is a temporary fake "lexicore" interface
     if args.dataset == "lexicore":
-        dataset_list = ["aaleykusunda", "abrahammonpa", "allenbai", "bdpa",
-                        "beidasinitic", "birchallchapacuran",
-                        "blustaustronesian", "bodtkhobwa", "bowernpny", "cals",
-                        "castrosui", "castroyi", "chaconarawakan",
-                        "chaconbaniwa", "chaconcolumbian", "chenhmongmien",
-                        "chindialectsurvey", "davletshinaztecan",
-                        "deepadungpalaung", "dravlex", "dunnaslian",
-                        "dunnielex", "galuciotupi", "gerarditupi", "halenepal",
-                        "hantganbangime", "hattorijaponic", "houchinese",
-                        "hubercolumbian", "ivanisuansu",
-                        "johanssonsoundsymbolic", "joophonosemantic",
-                        "kesslersignificance", "kraftchadic", "leekoreanic",
-                        "lieberherrkhobwa", "lundgrenomagoa", "mannburmish",
-                        "marrisonnaga", "mcelhanonhuon", "mitterhoferbena",
-                        "naganorgyalrongic", "northeuralex",
-                        "peirosaustroasiatic", "pharaocoracholaztecan",
-                        "robinsonap", "sagartst", "savelyevturkic",
-                        "sohartmannchin", "starostinpie", "suntb",
-                        "transnewguineaorg", "tryonsolomon", "walkerarawakan",
-                        "walworthpolynesian", "wold", "yanglalo",
-                        "zgraggenmadang", "zhaobai", "zhivlovobugrian", ]
+        dataset_list = [('lexibank', 'aaleykusunda'),
+                        ('lexibank', 'abrahammonpa'), ('lexibank', 'allenbai'),
+                        ('lexibank', 'bdpa'), ('lexibank', 'beidasinitic'),
+                        ('lexibank', 'birchallchapacuran'),
+                        ('sequencecomparison', 'blustaustronesian'),
+                        ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
+                        ('lexibank', 'cals'), ('lexibank', 'castrosui'),
+                        ('lexibank', 'castroyi'),
+                        ('lexibank', 'chaconarawakan'),
+                        ('lexibank', 'chaconbaniwa'),
+                        ('lexibank', 'chaconcolumbian'),
+                        ('lexibank', 'chenhmongmien'),
+                        ('lexibank', 'chindialectsurvey'),
+                        ('lexibank', 'davletshinaztecan'),
+                        ('lexibank', 'deepadungpalaung'),
+                        ('lexibank', 'dravlex'), ('lexibank', 'dunnaslian'),
+                        ('sequencecomparison', 'dunnielex'), ('lexibank', 'galuciotupi'),
+                        ('lexibank', 'gerarditupi'), ('lexibank', 'halenepal'),
+                        ('lexibank', 'hantganbangime'),
+                        ('sequencecomparison', 'hattorijaponic'),
+                        ('sequencecomparison', 'houchinese'),
+                        ('lexibank', 'hubercolumbian'),
+                        ('lexibank', 'ivanisuansu'),
+                        ('lexibank', 'johanssonsoundsymbolic'),
+                        ('lexibank', 'joophonosemantic'),
+                        ('sequencecomparison', 'kesslersignificance'),
+                        ('lexibank', 'kraftchadic'),
+                        ('lexibank', 'leekoreanic'),
+                        ('lexibank', 'lieberherrkhobwa'),
+                        ('lexibank', 'lundgrenomagoa'),
+                        ('lexibank', 'mannburmish'),
+                        ('lexibank', 'marrisonnaga'),
+                        ('lexibank', 'mcelhanonhuon'),
+                        ('lexibank', 'mitterhoferbena'),
+                        ('lexibank', 'naganorgyalrongic'),
+                        ('lexibank', 'northeuralex'),
+                        ('lexibank', 'peirosaustroasiatic'),
+                        ('lexibank', 'pharaocoracholaztecan'),
+                        ('lexibank', 'robinsonap'), ('lexibank', 'sagartst'),
+                        ('lexibank', 'savelyevturkic'),
+                        ('lexibank', 'sohartmannchin'),
+                        ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
+                        ('lexibank', 'transnewguineaorg'),
+                        ('lexibank', 'tryonsolomon'),
+                        ('lexibank', 'walkerarawakan'),
+                        ('lexibank', 'walworthpolynesian'),
+                        ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
+                        ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
+                        ('sequencecomparison', 'zhivlovobugrian')]
+
     else:
-        dataset_list = [args.dataset]
+        dataset_list = [args.dataset.split("/")]
 
     db = MockLexicore(dataset_list)
     data = SoundCorrespsByGenera(db, langgenera_path, args.log,
@@ -338,14 +373,14 @@ def run(args):
 
     available = find_available(args, data)
 
-    G = find_attested_corresps(args, data)
+    G = find_attested_corresps(args, data, is_bipa=args.model == "bipa")
 
     now = time.strftime("%Y%m%d-%Hh%M")
 
     output_prefix = "{timestamp}_corresp_min_occ_{cutoff}_" \
                     "min_sim_{threshold}_sounds_{model}_data_{dataset}_concepts_{concepts}".format(
         timestamp=now,
-        **vars(args))
+        **vars(args)).replace("/","-")
 
     # Output genus level info
     with open(output_prefix + '_results.csv', 'w', encoding="utf-8") as csvfile:

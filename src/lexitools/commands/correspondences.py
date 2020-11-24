@@ -256,11 +256,7 @@ def find_attested_corresps(args, data, is_bipa=False):
         for (lA, tokensA), (lB, tokensB) in data.iter_candidate_pairs(genus):
             tokens = (' '.join(tokensA), ' '.join(tokensB))
             if lingpy.edit_dist(*tokens) <= args.threshold:
-                if is_bipa:
-                    alignments = lingpy.Pairwise(*tokens)()
-                    almA, almB, sim = alignments[0] # Skipping any other alignments
-                else:
-                    almA, almB, sim = lingpy.nw_align(*tokens)
+                almA, almB, sim = lingpy.nw_align(*tokens)
                 for sound_pair in zip(almA, almB):
                     soundA, soundB = sound_pair
                     if soundA not in ignore and \

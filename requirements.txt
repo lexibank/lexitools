@@ -1,5 +1,4 @@
 numpy
 powerlaw
 pylexibank
-pyclts @ git+https://github.com/cldf-clts/pyclts.git#egg=pyclts
 linse @ git+https://github.com/lingpy/linse.git#egg=linse

@@ -204,11 +204,16 @@ def collect_results(
     bipa_a = sorted({entry["bipa"] for entry in values_a if entry["bipa"]})
     bipa_b = sorted({entry["bipa"] for entry in values_b if entry["bipa"]})
 
+    # Collect unicode graphemes missing
+    stray_a = sorted({entry['unicode'] for entry in values_a if not entry['bipa']})
+    stray_b = sorted({entry['unicode'] for entry in values_b if not entry['bipa']})
+
     # Build output
     output_row.update(non_clts_comparison(raw_a, raw_b, catalog_a, catalog_b, "raw"))
     output_row.update(
         non_clts_comparison(unicode_a, unicode_b, catalog_a, catalog_b, "unicode")
     )
+    output_row.update(non_clts_comparison(stray_a, stray_b, catalog_a, catalog_b, "stray"))
 
     clts_inv_a = Inventory.from_list(*bipa_a, clts=bipa)
     clts_inv_b = Inventory.from_list(*bipa_b, clts=bipa)
@@ -344,8 +349,6 @@ def run(args):
     # Write all sounds in a single table
     args.log.info("Writing sound table...")
     write_soundtable(values, inventories, glottolog)
-
-    return
 
     # Get a list of all glottocodes in common between all combinations
     for catalog_a, catalog_b in itertools.combinations_with_replacement(catalogs, 2):

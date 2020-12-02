@@ -23,6 +23,9 @@ import subprocess
 from importlib.util import find_spec
 from cldfbench import get_dataset
 import sys
+import json
+from lexitools.coarse_soundclass import Coarsen
+
 
 class MockLexicore(object):
     """This is a mock to access the data without waiting on the Lexibank SQL project,
@@ -60,7 +63,7 @@ class MockLexicore(object):
 class SoundCorrespsByGenera(object):
 
     def __init__(self, db, langgenera_path, log, concept_list=None,
-                 sound_class=None, glottolog=None):
+                 sound_class=None, glottolog=None, asjp=False):
         self.sound_class = sound_class
         self.lang_to_genera = get_langgenera_mapping(langgenera_path)
 
@@ -72,6 +75,8 @@ class SoundCorrespsByGenera(object):
         langoids = glottolog.languoids_by_code()
         self.genera_to_lang = defaultdict(set)
         self.genera_to_family = {}
+        self.errors = [["Dataset","Language_ID", "Sound", "Token", "ID"]]
+        self.asjp = asjp
 
         for row in progressbar(db.iter_table("LanguageTable"),
                                desc="listing languages"):
@@ -112,8 +117,9 @@ class SoundCorrespsByGenera(object):
             if concept not in self.concepts_subset or \
                     row["Language_ID"] not in langs or row["Segments"] is None:
                 continue
+
             try:
-                token = list(self._iter_phonemes(row["Segments"]))
+                token = list(self._iter_phonemes(row))
             except KeyError as e:
                 continue  # skip this token, it contains unknown sounds
             if token == [""]: continue
@@ -126,15 +132,24 @@ class SoundCorrespsByGenera(object):
         log.info(r"Total number of concepts kept: {}".format(
             len(self.concepts_subset)))
 
-    def _iter_phonemes(self, segments):
+    def _iter_phonemes(self, row):
         # In some dataset, the separator defined in the metadata is " + ",
         # which means that tokens are not phonemes (ex:bodtkhobwa)
         # This is solved by re-tokenizing on the space...
-        tokens = " ".join([s for s in segments if s is not None]).split(" ")
+        if self.asjp:
+            segments = row["Graphemes"][1:-1]
+        else:
+            segments = row["Segments"]
+
+        tokens = " ".join([s for s in segments if (s is not None and s != "")]).split(" ")
         for segment in tokens:
-            if "/" in segment:
-                segment = segment.split("/")[1]
-            yield self.sound_class(segment)
+            try:
+                if "/" in segment:
+                    segment = segment.split("/")[1]
+                yield self.sound_class(segment)
+            except KeyError as e:
+                self.errors.append((row["dataset"], row["Language_ID"], segment, " ".join(str(x) for x in segments), row["ID"]))
+                raise e
 
     def iter_candidate_pairs(self, genus):
         langs = self.genera_to_lang[genus]
@@ -192,10 +207,10 @@ def register(parser):
 
     parser.add_argument(
         '--model',
-        action='store',
-        default='bipa',
+        choices=["BIPA", "ASJPcode", "Coarse"],
+        default='BIPA',
         type=str,
-        help='select a sound class model: asjp, bipa, color, sca')
+        help='select a sound class model: BIPA, ASJPcode, or Coarse.')
 
     parser.add_argument(
         '--concepts',
@@ -267,101 +282,79 @@ def find_attested_corresps(args, data, is_bipa=False):
                         except KeyError:
                             G.add_edge(soundA, soundB,
                                        occurences=Counter({(lA, lB): 1}))
-
-    args.log.info('Filtering out rare corresps...')
-    del_edges = []
-    for nA, nB in G.edges():
-        for lA, lB in list(G[nA][nB]['occurences']):
-            freq = G[nA][nB]['occurences'][(lA, lB)]
-            if freq < args.cutoff:
-                del G[nA][nB]['occurences'][(lA, lB)]
-        if len(G[nA][nB]['occurences']) == 0:
-            del_edges += [(nA, nB)]
-        else:
-            G[nA][nB]['weight'] = len(
-                G[nA][nB]['occurences'])  # number of lg pair
-    G.remove_edges_from(del_edges)
     return G
+
+
+LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
+            ('lexibank', 'allenbai'), ('lexibank', 'bdpa'),
+            ('lexibank', 'beidasinitic'), ('lexibank', 'birchallchapacuran'),
+            ('sequencecomparison', 'blustaustronesian'),
+            ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
+            ('lexibank', 'cals'), ('lexibank', 'castrosui'),
+            ('lexibank', 'castroyi'), ('lexibank', 'chaconarawakan'),
+            ('lexibank', 'chaconbaniwa'), ('lexibank', 'chaconcolumbian'),
+            ('lexibank', 'chenhmongmien'), ('lexibank', 'chindialectsurvey'),
+            ('lexibank', 'davletshinaztecan'), ('lexibank', 'deepadungpalaung'),
+            ('lexibank', 'dravlex'), ('lexibank', 'dunnaslian'),
+            ('sequencecomparison', 'dunnielex'), ('lexibank', 'galuciotupi'),
+            ('lexibank', 'gerarditupi'), ('lexibank', 'halenepal'),
+            ('lexibank', 'hantganbangime'),
+            ('sequencecomparison', 'hattorijaponic'),
+            ('sequencecomparison', 'houchinese'),
+            ('lexibank', 'hubercolumbian'), ('lexibank', 'ivanisuansu'),
+            ('lexibank', 'johanssonsoundsymbolic'),
+            ('lexibank', 'joophonosemantic'),
+            ('sequencecomparison', 'kesslersignificance'),
+            ('lexibank', 'kraftchadic'), ('lexibank', 'leekoreanic'),
+            ('lexibank', 'lieberherrkhobwa'), ('lexibank', 'lundgrenomagoa'),
+            ('lexibank', 'mannburmish'), ('lexibank', 'marrisonnaga'),
+            ('lexibank', 'mcelhanonhuon'), ('lexibank', 'mitterhoferbena'),
+            ('lexibank', 'naganorgyalrongic'), ('lexibank', 'northeuralex'),
+            ('lexibank', 'peirosaustroasiatic'),
+            ('lexibank', 'pharaocoracholaztecan'), ('lexibank', 'robinsonap'),
+            ('lexibank', 'sagartst'), ('lexibank', 'savelyevturkic'),
+            ('lexibank', 'sohartmannchin'),
+            ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
+            ('lexibank', 'transnewguineaorg'), ('lexibank', 'tryonsolomon'),
+            ('lexibank', 'walkerarawakan'), ('lexibank', 'walworthpolynesian'),
+            ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
+            ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
+            ('sequencecomparison', 'zhivlovobugrian')]
 
 
 def run(args):
     langgenera_path = "./src/lexitools/commands/lang_genera-v1.0.0.tsv"
     clts = args.clts.from_config().api
-    if args.model == "bipa":
-        def sound_class(sound):
-            sound_system = clts.transcriptionsystem_dict[args.model]
-            return str(sound_system[sound])
-    else:
-        def sound_class(sound):
-            sound_system = clts.soundclasses_dict[args.model]
-            extras = {'cʃ': 'TS~', 'pʃ': 'pS~', 'pχʼ': 'p"X~',
-                      'd̪ʒ': 'j'}  # these are missing from the clts model
-            try:
-                return str(sound_system[sound])
-            except KeyError:
-                return extras[sound]
+
+    """Three options for sound classes:
+    
+    1. Keep original BIPA symbols. Very precise, but variations in annotation make the results noisy.
+    2. ASJP. Only possible with the lexibank/asjp dataset, as we don't have any BIPA->ASJPcode converter.
+    3. Coarsen BIPA to keep only some main features. This tries to strike a balance between BIPA and avoiding noise.
+    """
+    full_asjp = False
+    if args.model == "BIPA":
+        def to_sound_class(sound): return str(clts.bipa[sound])
+    elif args.model == "Coarse":
+        coarse = Coarsen(clts.bipa)
+        def to_sound_class(sound): return coarse[sound]
+    elif args.model == "ASJPcode":
+        if args.dataset == "lexibank/asjp":
+            full_asjp = True
+            def to_sound_class(sound): return sound
+        else:
+            raise ValueError("ASJPcode only possible with lexibank/asjp")
 
     ## This is a temporary fake "lexicore" interface
-    if args.dataset == "lexicore":
-        dataset_list = [('lexibank', 'aaleykusunda'),
-                        ('lexibank', 'abrahammonpa'), ('lexibank', 'allenbai'),
-                        ('lexibank', 'bdpa'), ('lexibank', 'beidasinitic'),
-                        ('lexibank', 'birchallchapacuran'),
-                        ('sequencecomparison', 'blustaustronesian'),
-                        ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
-                        ('lexibank', 'cals'), ('lexibank', 'castrosui'),
-                        ('lexibank', 'castroyi'),
-                        ('lexibank', 'chaconarawakan'),
-                        ('lexibank', 'chaconbaniwa'),
-                        ('lexibank', 'chaconcolumbian'),
-                        ('lexibank', 'chenhmongmien'),
-                        ('lexibank', 'chindialectsurvey'),
-                        ('lexibank', 'davletshinaztecan'),
-                        ('lexibank', 'deepadungpalaung'),
-                        ('lexibank', 'dravlex'), ('lexibank', 'dunnaslian'),
-                        ('sequencecomparison', 'dunnielex'), ('lexibank', 'galuciotupi'),
-                        ('lexibank', 'gerarditupi'), ('lexibank', 'halenepal'),
-                        ('lexibank', 'hantganbangime'),
-                        ('sequencecomparison', 'hattorijaponic'),
-                        ('sequencecomparison', 'houchinese'),
-                        ('lexibank', 'hubercolumbian'),
-                        ('lexibank', 'ivanisuansu'),
-                        ('lexibank', 'johanssonsoundsymbolic'),
-                        ('lexibank', 'joophonosemantic'),
-                        ('sequencecomparison', 'kesslersignificance'),
-                        ('lexibank', 'kraftchadic'),
-                        ('lexibank', 'leekoreanic'),
-                        ('lexibank', 'lieberherrkhobwa'),
-                        ('lexibank', 'lundgrenomagoa'),
-                        ('lexibank', 'mannburmish'),
-                        ('lexibank', 'marrisonnaga'),
-                        ('lexibank', 'mcelhanonhuon'),
-                        ('lexibank', 'mitterhoferbena'),
-                        ('lexibank', 'naganorgyalrongic'),
-                        ('lexibank', 'northeuralex'),
-                        ('lexibank', 'peirosaustroasiatic'),
-                        ('lexibank', 'pharaocoracholaztecan'),
-                        ('lexibank', 'robinsonap'), ('lexibank', 'sagartst'),
-                        ('lexibank', 'savelyevturkic'),
-                        ('lexibank', 'sohartmannchin'),
-                        ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
-                        ('lexibank', 'transnewguineaorg'),
-                        ('lexibank', 'tryonsolomon'),
-                        ('lexibank', 'walkerarawakan'),
-                        ('lexibank', 'walworthpolynesian'),
-                        ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
-                        ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
-                        ('sequencecomparison', 'zhivlovobugrian')]
-
-    else:
-        dataset_list = [args.dataset.split("/")]
+    dataset_list = LEXICORE if args.dataset == "lexicore" else [args.dataset.split("/")]
 
     db = MockLexicore(dataset_list)
     data = SoundCorrespsByGenera(db, langgenera_path, args.log,
-                                 sound_class=sound_class,
+                                 sound_class=to_sound_class,
                                  concept_list=args.concepts,
                                  glottolog=pyglottolog.Glottolog(
-                                     args.glottolog.dir))
+                                     args.glottolog.dir),
+                                 asjp=full_asjp)
 
     args.log.info('Loaded the wordlist ({} languages, {} genera)'.format(
         len(data.lang_to_concept),
@@ -373,10 +366,8 @@ def run(args):
 
     now = time.strftime("%Y%m%d-%Hh%M")
 
-    output_prefix = "{timestamp}_corresp_min_occ_{cutoff}_" \
-                    "min_sim_{threshold}_sounds_{model}_data_{dataset}_concepts_{concepts}".format(
-        timestamp=now,
-        **vars(args)).replace("/","-")
+
+    output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
 
     # Output genus level info
     with open(output_prefix + '_results.csv', 'w', encoding="utf-8") as csvfile:
@@ -386,16 +377,39 @@ def run(args):
         for a, b in available:
             occ_by_genus = Counter()
             if G.has_edge(a, b):
-                for lA, lB in G[a][b]["occurences"]:
-                    occ_by_genus[data.lang_to_genera[lA]] += \
-                        G[a][b]["occurences"][(lA, lB)]
+                occurences = G[a][b]["occurences"]
+                for lA, lB in occurences:
+                    if occurences[(lA, lB)] > args.cutoff:
+                        occ_by_genus[data.lang_to_genera[lA]] += occurences[(lA, lB)]
 
             for genus in available[(a, b)]:
-                writer.writerow([data.genera_to_family[genus], genus, a, b, 1,
-                                 occ_by_genus[genus]])
+                observed = int(occ_by_genus[genus] > 0)
+                writer.writerow([data.genera_to_family[genus], genus, a, b, 1, observed])
 
     with open(output_prefix + '_concepts_intersection.csv', 'w',
               encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
         writer.writerow(["Genus", "Lang A", "Lang B", "Common concepts"])
         writer.writerows(data.concepts_intersection)
+
+    metadata_dict = {"observation cutoff": args.cutoff,
+                     "similarity threshold": args.threshold,
+                     "model": args.model,
+                     "concepts": args.concepts,
+                     "dataset": args.dataset}
+    dataset_str = sorted(a+"/"+b for a,b in dataset_list)
+    metadata_dict["dataset_list"] = dataset_str
+    metadata_dict["n_languages"] =  len(data.lang_to_concept)
+    metadata_dict["n_genera"] = len(data.genera_to_lang)
+    metadata_dict["n_concepts"] = len(data.concepts_subset)
+    metadata_dict["n_tokens"] = len(data.tokens)
+
+    with open(output_prefix + '_metadata.json', 'w',
+              encoding="utf-8") as metafile:
+        json.dump(metadata_dict, metafile)
+
+
+    with open(output_prefix + '_sound_errors.csv', 'w',
+              encoding="utf-8") as errorfile:
+        for line in data.errors:
+            errorfile.write(",".join(line)+"\n")

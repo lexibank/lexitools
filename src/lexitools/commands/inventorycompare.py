@@ -182,7 +182,7 @@ def collect_inventory_values(dataset, inventory_list, parameter_map):
 
 
 def collect_results(
-    values_a, values_b, catalog_a, catalog_b, inventory_a, inventory_b, glottocode, bipa
+    values_a, values_b, catalog_a, catalog_b, inventory_a, inventory_b, glottocode, bipa, source=None
 ):
     """
     Collect raw, unicode, and bipa comparison values for output.
@@ -195,6 +195,8 @@ def collect_results(
         "inventory_a": inventory_a,
         "inventory_b": inventory_b,
     }
+    if source:
+        output_row['source'] = source
 
     # Single-pass collection of all entries would be faster
     raw_a = sorted([entry["raw"] for entry in values_a])
@@ -224,14 +226,100 @@ def collect_results(
     return output_row
 
 
-def write_output(output_rows, catalog_a, catalog_b):
+def iterate_combinations(values, inventories, catalogs, bipa, glottolog, args, source=False):
+    """
+    Iterate over all combinations and write results
+    """
+
+    # Get a list of all glottocodes in common between all combinations
+    for catalog_a, catalog_b in itertools.combinations_with_replacement(catalogs, 2):
+        glottocodes_a = list(inventories[catalog_a].keys())
+        glottocodes_b = list(inventories[catalog_b].keys())
+
+        common = sorted(
+            [glottocode for glottocode in glottocodes_a if glottocode in glottocodes_b]
+        )
+
+        if source:
+            args.log.info(
+            f"Processing `{catalog_a}` and `{catalog_b}` ({len(common)} common codes) by source..."
+        )
+        else:
+            args.log.info(
+            f"Processing `{catalog_a}` and `{catalog_b}` ({len(common)} common codes) by glottocode..."
+        )
+
+        output_rows = []
+        for glottocode in common:
+            # If we are doing in-catalog comparison, we only compare glottocodes
+            # that have multiple inventories
+            if catalog_a == catalog_b:
+                catalog_inventories = inventories[catalog_a][glottocode]
+                if len(catalog_inventories) == 1:
+                    comparanda = []
+                else:
+                    comparanda = list(itertools.combinations(catalog_inventories, 2))
+            else:
+                # Grab all inventories
+                inventories_a = list(inventories[catalog_a][glottocode])
+                inventories_b = list(inventories[catalog_b][glottocode])
+
+                comparanda = list(itertools.product(inventories_a, inventories_b))
+
+            for inventory_a, inventory_b in comparanda:
+                # Extract values and build raw/unicode/bipa lists; we take sets of
+                # unicode and clts, as we might have repeated items due to conversion
+                values_a = values[inventory_a]
+                values_b = values[inventory_b]
+
+                # Collect row of output and add other info
+                if source:
+                    output_row = collect_results(
+                    values_a,
+                    values_b,
+                    catalog_a,
+                    catalog_b,
+                    inventory_a,
+                    inventory_b,
+                    glottocode[0],
+                    bipa,
+                    source=glottocode[1]
+                )
+                else:
+                    output_row = collect_results(
+                    values_a,
+                    values_b,
+                    catalog_a,
+                    catalog_b,
+                    inventory_a,
+                    inventory_b,
+                    glottocode,
+                    bipa,
+                )
+
+                output_row["language"] = glottolog.languoid(output_row['glottocode']).name
+                output_rows.append(output_row)
+
+        # write results
+        if output_rows:
+            if source:
+                filename = f"output/results_{catalog_a}-{catalog_b}.sources.tsv"
+            else:
+                filename = f"output/results_{catalog_a}-{catalog_b}.glottocode.tsv"
+            write_output(output_rows, filename)
+
+
+
+
+
+def write_output(output_rows, filename):
     """
     Write results for a pairwise catalog comparison.
     """
 
     first_fields = ["glottocode", "language"]
 
-    filename = f"output/results_{catalog_a}-{catalog_b}.tsv"
+
     with open(filename, "w") as tsvfile:
         # Get fieldnames, making sure glottolog info comes firts
         fieldnames = list(output_rows[0].keys())
@@ -245,7 +333,7 @@ def write_output(output_rows, catalog_a, catalog_b):
         writer.writerows(output_rows)
 
 
-def write_soundtable(values, inventories, glottolog):
+def write_soundtable(values, inventories, glottolog, source=False):
     """
     Write a single table with all sounds.
     """
@@ -285,18 +373,28 @@ def write_soundtable(values, inventories, glottolog):
     # Add language names, sort, and output
     for row in rows:
         row["language"] = lang_names.get(row["glottocode"], "")
-        t = (row["catalog"], row["language"], row["bipa"], row["unicode"])
-        if None in t:
-            print(row)
+        if source:
+            row['glottocode'], row['source'] = row['glottocode']
+
     rows = sorted(
         rows, key=lambda r: (r["catalog"], r["language"], r["bipa"], r["unicode"])
     )
 
-    with open("output/sound-table.tsv", "w") as output:
-        writer = csv.DictWriter(
-            output,
-            delimiter="\t",
-            fieldnames=[
+    if source:
+        filename = "output/sound-table.source.tsv"
+        fieldnames=[
+                "catalog",
+                "language",
+                "inventory",
+                "glottocode",
+                "source",
+                "raw",
+                "unicode",
+                "bipa",
+            ]
+    else:
+        filename = "output/sound-table.glottocode.tsv"
+        fieldnames=[
                 "catalog",
                 "language",
                 "inventory",
@@ -304,7 +402,13 @@ def write_soundtable(values, inventories, glottolog):
                 "raw",
                 "unicode",
                 "bipa",
-            ],
+            ]
+
+    with open(filename, "w") as output:
+        writer = csv.DictWriter(
+            output,
+            delimiter="\t",
+            fieldnames=fieldnames,
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -336,7 +440,8 @@ def run(args):
         for row in ds["ParameterTable"]
     }
 
-    # Collect all contribution IDs mapped to a given glottocode
+    # Collect all contribution IDs mapped to a given glottocode, for
+    # glottocode comparison
     inventories = defaultdict(lambda: defaultdict(set))
     for row in ds["ValueTable"]:
         if row["Catalog"] in catalogs:
@@ -344,63 +449,25 @@ def run(args):
             if glottocode:
                 inventories[row["Catalog"]][glottocode].add(row["Contribution_ID"])
 
+    # Collect unique references per glottocode, for source comparison
+    inventories_source = defaultdict(lambda:defaultdict(set))
+    for row in ds['ValueTable']:
+        lid = row['Language_ID']
+        glottocode = glottocode_map.get(row['Language_ID'])
+        source = ";".join(row['Source'])
+        if glottocode and source:
+            inventories_source[row['Catalog']][glottocode, source].add(row['Contribution_ID'])
+
+    # Collect value for glottocode comparison (values) and for
+    # for source comparison (values_source)
     values = collect_inventory_values(ds, inventories, parameter_map)
+    values_source = collect_inventory_values(ds, inventories_source, parameter_map)
 
-    # Write all sounds in a single table
-    args.log.info("Writing sound table...")
+    # Write all sounds for both comparisons in single tables
+    args.log.info("Writing sound tables...")
     write_soundtable(values, inventories, glottolog)
+    write_soundtable(values_source, inventories_source, glottolog, source=True)
 
-    # Get a list of all glottocodes in common between all combinations
-    for catalog_a, catalog_b in itertools.combinations_with_replacement(catalogs, 2):
-        glottocodes_a = list(inventories[catalog_a].keys())
-        glottocodes_b = list(inventories[catalog_b].keys())
-
-        common = sorted(
-            [glottocode for glottocode in glottocodes_a if glottocode in glottocodes_b]
-        )
-
-        args.log.info(
-            f"Processing `{catalog_a}` and `{catalog_b}` ({len(common)} common codes)..."
-        )
-
-        output_rows = []
-        for glottocode in common:
-            # If we are doing in-catalog comparison, we only compare glottocodes
-            # that have multiple inventories
-            if catalog_a == catalog_b:
-                catalog_inventories = inventories[catalog_a][glottocode]
-                if len(catalog_inventories) == 1:
-                    comparanda = []
-                else:
-                    comparanda = list(itertools.combinations(catalog_inventories, 2))
-            else:
-                # Grab all inventories
-                inventories_a = list(inventories[catalog_a][glottocode])
-                inventories_b = list(inventories[catalog_b][glottocode])
-
-                comparanda = list(itertools.product(inventories_a, inventories_b))
-
-            for inventory_a, inventory_b in comparanda:
-                # Extract values and build raw/unicode/bipa lists; we take sets of
-                # unicode and clts, as we might have repeated items due to conversion
-                values_a = values[inventory_a]
-                values_b = values[inventory_b]
-
-                # Collect row of output and add other info
-                output_row = collect_results(
-                    values_a,
-                    values_b,
-                    catalog_a,
-                    catalog_b,
-                    inventory_a,
-                    inventory_b,
-                    glottocode,
-                    bipa,
-                )
-                output_row["language"] = glottolog.languoid(glottocode).name
-
-                output_rows.append(output_row)
-
-        # write results
-        if output_rows:
-            write_output(output_rows, catalog_a, catalog_b)
+    # Iterate over all combinations and write results
+    iterate_combinations(values, inventories, catalogs, bipa, glottolog, args)
+    iterate_combinations(values_source, inventories_source, catalogs, bipa, glottolog, args, source=True)

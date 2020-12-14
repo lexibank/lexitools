@@ -238,7 +238,7 @@ class Correspondences(object):
 
         self.args.log.info('Counting available corresp...')
 
-        sounds_by_genera = defaultdict(lambda: defaultdict(lambda: Counter()))
+        sounds_by_genera = defaultdict(lambda: defaultdict(Counter))
         for genus, lang, concept, token in self.data:
             for sound in token:
                 if sound not in "+*#_":  # spaces and segmentation symbols ignored
@@ -266,6 +266,7 @@ class Correspondences(object):
                 if occ_A and occ_B and len(occ_A | occ_B) > 1:
                     sound_pair = tuple(sorted((sound_A, sound_B)))
                     available[sound_pair].append(genus)
+
         return available
 
     def differences(self, ta, tb):
@@ -432,7 +433,7 @@ def run(args):
             count = corresp_finder.corresps[sounds]
             family = data.genera_to_family[A.genus]
             total = corresp_finder.total_cognates[(A.lang, B.lang)]
-            if count > (args.cutoff * total):
+            if count > max(2, args.cutoff * total):
                 writer.writerow([family, A.genus, A.lang, B.lang,
                                  A.sound, B.sound, A.context, B.context, count])
 
@@ -454,7 +455,7 @@ def run(args):
 
     metadata_dict = {"observation cutoff": args.cutoff,
                      "similarity threshold": args.threshold,
-                     "occurence cutoff (minimum proportion of cognates)": args.cutoff,
+                     "cutoff": args.cutoff,
                      "model": args.model,
                      "concepts": args.concepts,
                      "dataset": args.dataset}
@@ -465,6 +466,7 @@ def run(args):
     metadata_dict["n_concepts"] = len(data.concepts_subset)
     metadata_dict["n_tokens"] = len(data.tokens)
     metadata_dict["threshold_method"] = "normalized per syllable"
+    metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
     metadata_dict["alignment_method"] = "T/non T penalized"
     if args.model == "Coarse":
         metadata_dict["coarsening_removed"] = list(DEFAULT_CONFIG["remove"])

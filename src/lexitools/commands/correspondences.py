@@ -12,7 +12,7 @@ from cldfcatalog import Config
 import lingpy
 
 from itertools import combinations, product
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, namedtuple
 from pylexibank import progressbar
 import pyglottolog
 import networkx as nx
@@ -79,6 +79,7 @@ class SoundCorrespsByGenera(object):
         self.genera_to_family = {}
         self.errors = [["Dataset","Language_ID", "Sound", "Token", "ID"]]
         self.asjp = asjp
+        self.concepts_intersection = Counter()
 
         for row in progressbar(db.iter_table("LanguageTable"),
                                desc="listing languages"):
@@ -122,15 +123,13 @@ class SoundCorrespsByGenera(object):
 
             try:
                 token = list(self._iter_phonemes(row))
-            except KeyError as e: continue  # unknown sounds
+            except ValueError as e: continue  # unknown sounds
             if token == [""]: continue
-
             syllables = len(lingpy.sequence.sound_classes.syllabify(token, output="nested"))
             gcode, family, genus = langs[row["Language_ID"]]
             self.tokens[(gcode, concept)].add((tuple(token), syllables))
             self.lang_to_concept[gcode].add(concept)
 
-        self.concepts_intersection = []
         log.info(r"Total number of concepts kept: {}".format(
             len(self.concepts_subset)))
 
@@ -149,27 +148,28 @@ class SoundCorrespsByGenera(object):
                 if "/" in segment:
                     segment = segment.split("/")[1]
                 yield self.sound_class(segment)
-            except KeyError as e:
-                self.errors.append((row["dataset"], row["Language_ID"], segment, " ".join(str(x) for x in segments), row["ID"]))
+            except ValueError as e:
+                self.errors.append((row["dataset"], row["Language_ID"], segment,
+                                    " ".join(str(x) for x in segments), row["ID"]))
                 raise e
 
-    def iter_candidate_pairs(self, genus):
-        langs = self.genera_to_lang[genus]
-        lang_pairs = combinations(langs, r=2)
-        n_lang = len(langs)
-        tot_pairs = (n_lang * (n_lang - 1)) / 2
-        for langA, langB in progressbar(lang_pairs, total=tot_pairs,
-                                        desc="Language pairs"):
-            concepts_A = self.lang_to_concept[langA]
-            concepts_B = self.lang_to_concept[langB]
-            common_concepts = (concepts_A & concepts_B)
-            self.concepts_intersection.append((genus, langA, langB,
-                                               len(common_concepts)))
-            for concept in common_concepts:
-                tokens_A = self.tokens[(langA, concept)]
-                tokens_B = self.tokens[(langB, concept)]
-                for (tA, sA), (tB, sB) in product(tokens_A, tokens_B):
-                    yield (langA, tA, sA), (langB, tB, sB)
+    def iter_candidate_pairs(self):
+        for genus in progressbar(self.genera_to_lang, desc="Genera"):
+            langs = self.genera_to_lang[genus]
+            lang_pairs = combinations(langs, r=2)
+            n_lang = len(langs)
+            tot_pairs = (n_lang * (n_lang - 1)) / 2
+            for langA, langB in progressbar(lang_pairs, total=tot_pairs,
+                                            desc="Language pairs"):
+                concepts_A = self.lang_to_concept[langA]
+                concepts_B = self.lang_to_concept[langB]
+                common_concepts = (concepts_A & concepts_B)
+                self.concepts_intersection[(langA, langB)] += len(common_concepts)
+                for concept in common_concepts:
+                    tokens_A = self.tokens[(langA, concept)]
+                    tokens_B = self.tokens[(langB, concept)]
+                    for (tA, sA), (tB, sB) in product(tokens_A, tokens_B):
+                        yield genus, (langA, tA, sA), (langB, tB, sB)
 
     def __iter__(self):
         for lang, concept in self.tokens:
@@ -203,9 +203,9 @@ def register(parser):
     parser.add_argument(
         '--cutoff',
         action='store',
-        default=2,
+        default=0.05,
         type=float,
-        help='Cutoff for attested correspondences in a language pair.')
+        help='Cutoff for attested correspondences in a language pair, in proportion of the list of cognates.')
 
     parser.add_argument(
         '--model',
@@ -228,6 +228,10 @@ class Correspondences(object):
         self.data = data
         self.clts = clts
         self.sca = self.clts.soundclasses_dict["sca"]
+        self.corresps = Counter() # frozenset({Item,Item}): count
+        self.total_cognates =  Counter() # (lgA, lgB) : count
+        self.Item = namedtuple("Item", ["genus","lang","sound","context"] )
+        self.ignore = set("+*#_")
 
     def find_available(self):
         # Available if there are 2 distinct languages with each at least 2 occurences
@@ -272,29 +276,51 @@ class Correspondences(object):
     def allowed_differences(self, sa, sb):
         return max(sa, sb) * self.args.threshold
 
+    def with_contexts(self, almA, almB):
+        def ctxt(sequence):
+            for s in sequence:
+                if s == "-" or s in self.ignore:
+                    yield "-"
+                elif self.clts.bipa[s].type == "vowel":
+                    yield "V"
+                else:
+                    yield ""
+            yield "$"
+        def right_context(ctxt):
+            return next((c for c in ctxt if c != "-"))
+
+        catsA = list(ctxt(almA))
+        catsB = list(ctxt(almB))
+        l = len(almA)
+        prevA, prevB = "#", "#"
+        for i in range(l):
+            sA = almA[i]
+            sB = almB[i]
+            if catsA[i] == "-":
+                cA = ""
+            else:
+                cA = prevA+sA+right_context(catsA[i+1:])
+                prevA = catsA[i]
+            if catsB[i] == "-":
+                cB = ""
+            else:
+                cB = prevB+sB+right_context(catsB[i+1:])
+                prevB = catsB[i]
+            yield (sA, cA), (sB, cB)
+
     def find_attested_corresps(self):
         self.args.log.info('Counting attested corresp...')
-        G = nx.Graph()
-        ignore = "+*#_"
-        for genus in progressbar(self.data.genera_to_lang, desc="Genera"):
-            for (lA, tokensA, s_A), (lB, tokensB, s_B) in self.data.iter_candidate_pairs(genus):
-                dist =  self.differences(tokensA, tokensB)
-                tokens = (' '.join(tokensA), ' '.join(tokensB))
-                allowed = self.allowed_differences(s_A, s_B)
-                if dist <= allowed:
-                    almA, almB, sim = lingpy.nw_align(*tokens)
-                    for sound_pair in zip(almA, almB):
-                        soundA, soundB = sound_pair
-                        if soundA not in ignore and \
-                                soundB not in ignore and \
-                                (soundA != "-" or soundB != "-"):
-                            try:
-                                G[soundA][soundB]['occurences'][(lA, lB)] += 1
-                            except KeyError:
-                                G.add_edge(soundA, soundB,
-                                           occurences=Counter({(lA, lB): 1}))
-        return G
-
+        for genus, (lA, tokensA, s_A), (lB, tokensB, s_B) in self.data.iter_candidate_pairs():
+            dist =  self.differences(tokensA, tokensB)
+            allowed = self.allowed_differences(s_A, s_B)
+            if dist <= allowed:
+                self.total_cognates[(lA, lB)] += 1
+                almA, almB, sim = lingpy.nw_align(tokensA, tokensB)
+                for (sA, cA), (sB, cB) in self.with_contexts(almA, almB):
+                    if self.ignore.isdisjoint({sA, sB}):
+                        A = self.Item(genus=genus, lang=lA, sound=sA, context=cA)
+                        B = self.Item(genus=genus, lang=lB, sound=sB, context=cB)
+                        self.corresps[frozenset({A,B})] += 1
 
 LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
             ('lexibank', 'allenbai'), ('lexibank', 'bdpa'),
@@ -373,38 +399,46 @@ def run(args):
 
     corresp_finder = Correspondences(args, data, clts)
     available = corresp_finder.find_available()
-    G = corresp_finder.find_attested_corresps()
+    corresp_finder.find_attested_corresps()
 
-    now = time.strftime("%Y%m%d-%Hh%M")
+    now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
 
 
     output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
 
-    # Output genus level info
-    with open(output_prefix + '_results.csv', 'w', encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["Family", "Genus", "Sound A",
-                         "Sound B", "Available", "Observed"])
-        for a, b in available:
-            occ_by_genus = Counter()
-            if G.has_edge(a, b):
-                occurences = G[a][b]["occurences"]
-                for lA, lB in occurences:
-                    if occurences[(lA, lB)] > args.cutoff:
-                        occ_by_genus[data.lang_to_genera[lA]] += occurences[(lA, lB)]
 
+    with open(output_prefix + '_counts.csv', 'w', encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerow(["Family", "Genus", "Lang a", "Lang B", "Sound A",
+                         "Sound B", "Env A", "Env B", "Count"])
+        for sounds in corresp_finder.corresps:
+            A,B = sounds
+            count = corresp_finder.corresps[sounds]
+            family = data.genera_to_family[A.genus]
+            total = corresp_finder.total_cognates[(A.lang, B.lang)]
+            if count > (args.cutoff * total):
+                writer.writerow([family, A.genus, A.lang, B.lang,
+                                 A.sound, B.sound, A.context, B.context, count])
+
+    with open(output_prefix + '_available.csv', 'w', encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerow(["Family", "Genus", "Sound A", "Sound B"])
+        for a, b in available:
             for genus in available[(a, b)]:
-                observed = int(occ_by_genus[genus] > 0)
-                writer.writerow([data.genera_to_family[genus], genus, a, b, 1, observed])
+                writer.writerow([data.genera_to_family[genus], genus, a, b])
 
     with open(output_prefix + '_concepts_intersection.csv', 'w',
               encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["Genus", "Lang A", "Lang B", "Common concepts"])
-        writer.writerows(data.concepts_intersection)
+        writer.writerow(["Lang A", "Lang B", "Common concepts", "Kept concepts"])
+        for lA, lB in data.concepts_intersection:
+            concepts = data.concepts_intersection[(lA, lB)]
+            kept = corresp_finder.total_cognates[(lA, lB)]
+            writer.writerow([lA, lB, concepts, kept])
 
     metadata_dict = {"observation cutoff": args.cutoff,
                      "similarity threshold": args.threshold,
+                     "occurence cutoff (minimum proportion of cognates)":args.cutoff,
                      "model": args.model,
                      "concepts": args.concepts,
                      "dataset": args.dataset}
@@ -416,11 +450,12 @@ def run(args):
     metadata_dict["n_tokens"] = len(data.tokens)
     metadata_dict["threshold_method"] = "normalized per syllable"
     if args.model == "Coarse":
-        metadata_dict["coarsening"] = DEFAULT_CONFIG
+        metadata_dict["coarsening_removed"] = list(DEFAULT_CONFIG["remove"])
+        metadata_dict["coarsening_changed"] = DEFAULT_CONFIG["change"]
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:
-        json.dump(metadata_dict, metafile)
+        json.dump(metadata_dict, metafile, indent=4, sort_keys=True)
 
 
     with open(output_prefix + '_sound_errors.csv', 'w',

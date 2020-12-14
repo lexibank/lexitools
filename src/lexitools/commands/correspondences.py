@@ -298,16 +298,31 @@ class Correspondences(object):
             sA = almA[i]
             sB = almB[i]
             if catsA[i] == "-":
-                cA = ""
+                cA = "-"
             else:
                 cA = prevA + sA + right_context(catsA[i + 1:])
                 prevA = catsA[i]
             if catsB[i] == "-":
-                cB = ""
+                cB = "-"
             else:
                 cB = prevB + sB + right_context(catsB[i + 1:])
                 prevB = catsB[i]
             yield (sA, cA), (sB, cB)
+
+    def get_scorer(self, seqA, seqB):
+        """Custom alignment scorer which penalizes tone alignments with non tones."""
+        def score(a,b):
+            if a == b:
+                return 1
+            ta = self.clts.bipa[a].type == "tone"
+            tb = self.clts.bipa[b].type == "tone"
+            if ta != tb:
+                # Alignments of tones with anything but tones is penalized
+                # as having tones in the sequence is only a notational trick
+                return -10
+            else:
+                return -1
+        return {(a, b):score(a,b) for a, b in product(seqA, seqB)}
 
     def find_attested_corresps(self):
         self.args.log.info('Counting attested corresp...')
@@ -316,7 +331,7 @@ class Correspondences(object):
             allowed = self.allowed_differences(s_A, s_B)
             if dist <= allowed:
                 self.total_cognates[(lA, lB)] += 1
-                almA, almB, sim = lingpy.nw_align(tokensA, tokensB)
+                almA, almB, sim = lingpy.nw_align(tokensA, tokensB, self.get_scorer(tokensA, tokensB))
                 for (sA, cA), (sB, cB) in self.with_contexts(almA, almB):
                     if self.ignore.isdisjoint({sA, sB}):
                         A = self.Item(genus=genus, lang=lA, sound=sA, context=cA)
@@ -377,17 +392,13 @@ def run(args):
             return str(clts.bipa[sound])
     elif args.model == "Coarse":
         coarse = Coarsen(clts.bipa, DEFAULT_CONFIG)
-
         def to_sound_class(sound):
             return coarse[sound]
     elif args.model == "ASJPcode":
-        if args.dataset == "lexibank/asjp":
-            full_asjp = True
-
-            def to_sound_class(sound):
-                return sound
-        else:
+        if args.dataset != "lexibank/asjp":
             raise ValueError("ASJPcode only possible with lexibank/asjp")
+        full_asjp = True
+        def to_sound_class(sound): return sound # we will grab the graphemes column
 
     ## This is a temporary fake "lexicore" interface
     dataset_list = LEXICORE if args.dataset == "lexicore" else [args.dataset.split("/")]
@@ -454,6 +465,7 @@ def run(args):
     metadata_dict["n_concepts"] = len(data.concepts_subset)
     metadata_dict["n_tokens"] = len(data.tokens)
     metadata_dict["threshold_method"] = "normalized per syllable"
+    metadata_dict["alignment_method"] = "T/non T penalized"
     if args.model == "Coarse":
         metadata_dict["coarsening_removed"] = list(DEFAULT_CONFIG["remove"])
         metadata_dict["coarsening_changed"] = DEFAULT_CONFIG["change"]

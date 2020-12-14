@@ -8,14 +8,11 @@ from cldfbench.cli_util import add_catalog_spec
 from pyconcepticon.api import Concepticon
 from cldfcatalog import Config
 
-# lingpy for alignments
 import lingpy
-
 from itertools import combinations, product
 from collections import Counter, defaultdict, namedtuple
 from pylexibank import progressbar
 import pyglottolog
-import networkx as nx
 import csv
 import csvw
 import time
@@ -25,6 +22,7 @@ from cldfbench import get_dataset
 import sys
 import json
 from lexitools.coarse_soundclass import Coarsen, DEFAULT_CONFIG
+
 
 class MockLexicore(object):
     """This is a mock to access the data without waiting on the Lexibank SQL project,
@@ -68,7 +66,6 @@ class SoundCorrespsByGenera(object):
         with csvw.UnicodeDictReader(langgenera_path, delimiter="\t") as reader:
             self.lang_to_genera = {row['GLOTTOCODE']: row['GENUS'] for row in reader}
 
-
         # Obtain glottocode and family:
         # family can be obtained from glottolog (this is slow) if glottolog is loaded
         # if there is no glottocode, we can still use the hardcoded family
@@ -77,7 +74,7 @@ class SoundCorrespsByGenera(object):
         langoids = glottolog.languoids_by_code()
         self.genera_to_lang = defaultdict(set)
         self.genera_to_family = {}
-        self.errors = [["Dataset","Language_ID", "Sound", "Token", "ID"]]
+        self.errors = [["Dataset", "Language_ID", "Sound", "Token", "ID"]]
         self.asjp = asjp
         self.concepts_intersection = Counter()
 
@@ -123,9 +120,11 @@ class SoundCorrespsByGenera(object):
 
             try:
                 token = list(self._iter_phonemes(row))
-            except ValueError as e: continue  # unknown sounds
+            except ValueError as e:
+                continue  # unknown sounds
             if token == [""]: continue
-            syllables = len(lingpy.sequence.sound_classes.syllabify(token, output="nested"))
+            syllables = len(
+                lingpy.sequence.sound_classes.syllabify(token, output="nested"))
             gcode, family, genus = langs[row["Language_ID"]]
             self.tokens[(gcode, concept)].add((tuple(token), syllables))
             self.lang_to_concept[gcode].add(concept)
@@ -153,7 +152,7 @@ class SoundCorrespsByGenera(object):
                                     " ".join(str(x) for x in segments), row["ID"]))
                 raise e
 
-    def iter_candidate_pairs(self):
+    def iter_candidates(self):
         for genus in progressbar(self.genera_to_lang, desc="Genera"):
             langs = self.genera_to_lang[genus]
             lang_pairs = combinations(langs, r=2)
@@ -221,6 +220,7 @@ def register(parser):
         type=str,
         help='select a concept list to filter on')
 
+
 class Correspondences(object):
 
     def __init__(self, args, data, clts):
@@ -228,9 +228,9 @@ class Correspondences(object):
         self.data = data
         self.clts = clts
         self.sca = self.clts.soundclasses_dict["sca"]
-        self.corresps = Counter() # frozenset({Item,Item}): count
-        self.total_cognates =  Counter() # (lgA, lgB) : count
-        self.Item = namedtuple("Item", ["genus","lang","sound","context"] )
+        self.corresps = Counter()  # frozenset({Item,Item}): count
+        self.total_cognates = Counter()  # (lgA, lgB) : count
+        self.Item = namedtuple("Item", ["genus", "lang", "sound", "context"])
         self.ignore = set("+*#_")
 
     def find_available(self):
@@ -286,6 +286,7 @@ class Correspondences(object):
                 else:
                     yield ""
             yield "$"
+
         def right_context(ctxt):
             return next((c for c in ctxt if c != "-"))
 
@@ -299,19 +300,19 @@ class Correspondences(object):
             if catsA[i] == "-":
                 cA = ""
             else:
-                cA = prevA+sA+right_context(catsA[i+1:])
+                cA = prevA + sA + right_context(catsA[i + 1:])
                 prevA = catsA[i]
             if catsB[i] == "-":
                 cB = ""
             else:
-                cB = prevB+sB+right_context(catsB[i+1:])
+                cB = prevB + sB + right_context(catsB[i + 1:])
                 prevB = catsB[i]
             yield (sA, cA), (sB, cB)
 
     def find_attested_corresps(self):
         self.args.log.info('Counting attested corresp...')
-        for genus, (lA, tokensA, s_A), (lB, tokensB, s_B) in self.data.iter_candidate_pairs():
-            dist =  self.differences(tokensA, tokensB)
+        for genus, (lA, tokensA, s_A), (lB, tokensB, s_B) in self.data.iter_candidates():
+            dist = self.differences(tokensA, tokensB)
             allowed = self.allowed_differences(s_A, s_B)
             if dist <= allowed:
                 self.total_cognates[(lA, lB)] += 1
@@ -320,7 +321,8 @@ class Correspondences(object):
                     if self.ignore.isdisjoint({sA, sB}):
                         A = self.Item(genus=genus, lang=lA, sound=sA, context=cA)
                         B = self.Item(genus=genus, lang=lB, sound=sB, context=cB)
-                        self.corresps[frozenset({A,B})] += 1
+                        self.corresps[frozenset({A, B})] += 1
+
 
 LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
             ('lexibank', 'allenbai'), ('lexibank', 'bdpa'),
@@ -371,14 +373,19 @@ def run(args):
     """
     full_asjp = False
     if args.model == "BIPA":
-        def to_sound_class(sound): return str(clts.bipa[sound])
+        def to_sound_class(sound):
+            return str(clts.bipa[sound])
     elif args.model == "Coarse":
         coarse = Coarsen(clts.bipa, DEFAULT_CONFIG)
-        def to_sound_class(sound): return coarse[sound]
+
+        def to_sound_class(sound):
+            return coarse[sound]
     elif args.model == "ASJPcode":
         if args.dataset == "lexibank/asjp":
             full_asjp = True
-            def to_sound_class(sound): return sound
+
+            def to_sound_class(sound):
+                return sound
         else:
             raise ValueError("ASJPcode only possible with lexibank/asjp")
 
@@ -403,16 +410,14 @@ def run(args):
 
     now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
 
-
     output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
-
 
     with open(output_prefix + '_counts.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
         writer.writerow(["Family", "Genus", "Lang a", "Lang B", "Sound A",
                          "Sound B", "Env A", "Env B", "Count"])
         for sounds in corresp_finder.corresps:
-            A,B = sounds
+            A, B = sounds
             count = corresp_finder.corresps[sounds]
             family = data.genera_to_family[A.genus]
             total = corresp_finder.total_cognates[(A.lang, B.lang)]
@@ -438,13 +443,13 @@ def run(args):
 
     metadata_dict = {"observation cutoff": args.cutoff,
                      "similarity threshold": args.threshold,
-                     "occurence cutoff (minimum proportion of cognates)":args.cutoff,
+                     "occurence cutoff (minimum proportion of cognates)": args.cutoff,
                      "model": args.model,
                      "concepts": args.concepts,
                      "dataset": args.dataset}
-    dataset_str = sorted(a+"/"+b for a,b in dataset_list)
+    dataset_str = sorted(a + "/" + b for a, b in dataset_list)
     metadata_dict["dataset_list"] = dataset_str
-    metadata_dict["n_languages"] =  len(data.lang_to_concept)
+    metadata_dict["n_languages"] = len(data.lang_to_concept)
     metadata_dict["n_genera"] = len(data.genera_to_lang)
     metadata_dict["n_concepts"] = len(data.concepts_subset)
     metadata_dict["n_tokens"] = len(data.tokens)
@@ -457,8 +462,7 @@ def run(args):
               encoding="utf-8") as metafile:
         json.dump(metadata_dict, metafile, indent=4, sort_keys=True)
 
-
     with open(output_prefix + '_sound_errors.csv', 'w',
               encoding="utf-8") as errorfile:
         for line in data.errors:
-            errorfile.write(",".join(line)+"\n")
+            errorfile.write(",".join(line) + "\n")

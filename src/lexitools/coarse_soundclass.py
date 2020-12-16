@@ -4,6 +4,7 @@
 import pyclts
 from collections import defaultdict
 
+COMPOSITE = (pyclts.models.Diphthong, pyclts.models.Cluster)
 class Coarsen(object):
 
     cache = {}
@@ -19,7 +20,7 @@ class Coarsen(object):
         sounds = defaultdict(list)
         for sound in self.bipa.sounds:
             sound = self.bipa[sound]
-            if isinstance(sound, (pyclts.models.Diphthong, pyclts.models.Cluster)):
+            if isinstance(sound, COMPOSITE):
                 coarse_f = self.coarsen_features(sound.from_sound)
                 sounds[coarse_f].append(sound.from_sound)
                 coarse_f = self.coarsen_features(sound.to_sound)
@@ -30,7 +31,7 @@ class Coarsen(object):
 
         # Populate coarsened and cache
         for f in sounds:
-            name = min(sounds[f], key=lambda s:len(self.bipa[s].featureset))
+            name = min(sounds[f], key=lambda s:len(s.featureset)) # pick the simples
             self.names[f] = str(name)
             for s in sounds[f]:
                 self.cache[str(s)] = str(name)
@@ -42,10 +43,15 @@ class Coarsen(object):
             sound = self.bipa[item]
             if isinstance(sound, pyclts.models.UnknownSound):
                 raise ValueError("Unknown sound "+item)
-            if isinstance(sound, (pyclts.models.Diphthong, pyclts.models.Cluster)):
+            if isinstance(sound, COMPOSITE):
                 sa = self.coarsen_sound(sound.from_sound)
                 sb = self.coarsen_sound(sound.to_sound)
-                coarse_sound = sa + sb
+                new_sound = self.bipa[sa+sb]
+                if not isinstance(new_sound, COMPOSITE + (pyclts.models.UnknownSound,)):
+                    # we reduced this into a simple sound, needs further coarsening
+                    coarse_sound = self[str(new_sound)]
+                else:
+                    coarse_sound = str(self.bipa[sa+sb])
             else:
                 coarse_sound = self.coarsen_sound(sound)
             self.cache[item] = coarse_sound
@@ -69,20 +75,21 @@ class Coarsen(object):
 
 DEFAULT_CONFIG = dict(
     remove={'advanced', 'advanced-tongue-root', 'apical', 'aspirated', 'breathy',
-            'centralized', 'creaky', 'ejective', 'glottalized', 'labialized',
+            'centralized', 'creaky', 'devoiced', 'ejective', 'glottalized', 'labialized',
             'labio-palatalized', 'laminal', 'less-rounded', 'long', 'lowered',
-            'mid-centralized', 'mid-long', 'more-rounded', 'non-syllabic',
-            # 'nasalized'
+            'mid-centralized', 'mid-long', 'more-rounded',
+            # 'nasalized',
+            'non-syllabic',
             'palatalized', 'pharyngealized', 'pre-aspirated', 'pre-glottalized',
             'pre-labialized', 'pre-nasalized', 'pre-palatalized', 'primary-stress',
-            'raised', 'retracted', 'retracted-tongue-root', 'rhotacized',
+            'raised', 'retracted', 'retracted-tongue-root','revoiced', 'rhotacized',
             'secondary-stress', 'strong', 'syllabic', 'ultra-long', 'ultra-short',
             'unreleased', 'velarized', 'with-frication', 'with-lateral-release',
             'with-mid-central-vowel-release', 'with-nasal-release', 'with_downstep',
             'with_extra-high_tone', 'with_extra-low_tone', 'with_falling_tone',
             'with_global_fall', 'with_global_rise', 'with_high_tone', 'with_low_tone',
             'with_mid_tone', 'with_rising_tone', 'with_upstep',
-            'revoiced', 'devoiced'},
+             },
     change={'alveolar': 'anterior', 'alveolo-palatal': 'palatal', 'close-mid': 'mid',
           'dental': 'anterior', 'linguolabial': 'labial', 'nasal-click': 'click',
           'near-back': 'back', 'near-close': 'close', 'near-front': 'front',

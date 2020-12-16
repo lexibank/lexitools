@@ -282,11 +282,11 @@ class Correspondences(object):
             for s in sequence:
                 if s == "-" or s in self.ignore:
                     yield "-"
-                elif self.clts.bipa[s].type == "vowel":
+                elif self.clts.bipa[s].type in ["vowel", "diphthong"]:
                     yield "V"
                 else:
                     yield ""
-            yield "$"
+            yield "#"
 
         def right_context(ctxt):
             return next((c for c in ctxt if c != "-"))
@@ -455,7 +455,6 @@ def run(args):
 
     metadata_dict = {"observation cutoff": args.cutoff,
                      "similarity threshold": args.threshold,
-                     "cutoff": args.cutoff,
                      "model": args.model,
                      "concepts": args.concepts,
                      "dataset": args.dataset}

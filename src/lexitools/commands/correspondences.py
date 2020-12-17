@@ -429,7 +429,7 @@ def run(args):
         writer.writerow(["Family", "Genus", "Lang a", "Lang B", "Sound A",
                          "Sound B", "Env A", "Env B", "Count"])
         for sounds in corresp_finder.corresps:
-            A, B = sounds
+            A, B = sorted(sounds, key=lambda s:s.sound) # ensures we always have the same order.
             count = corresp_finder.corresps[sounds]
             family = data.genera_to_family[A.genus]
             total = corresp_finder.total_cognates[(A.lang, B.lang)]

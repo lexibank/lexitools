@@ -280,16 +280,19 @@ class Correspondences(object):
     def with_contexts(self, almA, almB):
         def ctxt(sequence):
             for s in sequence:
-                if s == "-" or s in self.ignore:
-                    yield "-"
-                elif self.clts.bipa[s].type in ["vowel", "diphthong"]:
+                cat = self.clts.bipa[s].type
+                if s == "-" or s in self.ignore or cat in {"tone"}:
+                    yield None
+                elif cat in {"vowel", "diphthong"}:
                     yield "V"
                 else:
-                    yield ""
+                    yield "C"  # consonant or cluster
             yield "#"
 
         def right_context(ctxt):
-            return next((c for c in ctxt if c != "-"))
+            for c in ctxt:
+                if c is not None:
+                    return c
 
         catsA = list(ctxt(almA))
         catsB = list(ctxt(almB))
@@ -298,13 +301,13 @@ class Correspondences(object):
         for i in range(l):
             sA = almA[i]
             sB = almB[i]
-            if catsA[i] == "-":
-                cA = "-"
+            if catsA[i] is None: # No context for null "-" and tones
+                cA = sA
             else:
                 cA = prevA + sA + right_context(catsA[i + 1:])
                 prevA = catsA[i]
-            if catsB[i] == "-":
-                cB = "-"
+            if catsB[i] is None: # No context for null "-" and tones
+                cB = sB
             else:
                 cB = prevB + sB + right_context(catsB[i + 1:])
                 prevB = catsB[i]

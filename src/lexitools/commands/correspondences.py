@@ -289,10 +289,15 @@ class Correspondences(object):
                     yield "C"  # consonant or cluster
             yield "#"
 
-        def right_context(ctxt):
-            for c in ctxt:
-                if c is not None:
-                    return c
+        def context(cats, i, sound, left):
+            if cats[i] is None: # No context for null "-" and tones
+                c = sound
+                prev = left
+            else:
+                right = next((c for c in cats[i+1:] if c is not None))
+                c = left + sound + right
+                prev = cats[i]
+            return prev, c
 
         catsA = list(ctxt(almA))
         catsB = list(ctxt(almB))
@@ -300,17 +305,9 @@ class Correspondences(object):
         prevA, prevB = "#", "#"
         for i in range(l):
             sA = almA[i]
+            prevA, cA = context(catsA, i, sA, prevA)
             sB = almB[i]
-            if catsA[i] is None: # No context for null "-" and tones
-                cA = sA
-            else:
-                cA = prevA + sA + right_context(catsA[i + 1:])
-                prevA = catsA[i]
-            if catsB[i] is None: # No context for null "-" and tones
-                cB = sB
-            else:
-                cB = prevB + sB + right_context(catsB[i + 1:])
-                prevB = catsB[i]
+            prevB, cB = context(catsB, i, sB, prevB)
             yield (sA, cA), (sB, cB)
 
     def get_scorer(self, seqA, seqB):
@@ -429,7 +426,7 @@ def run(args):
 
     with open(output_prefix + '_counts.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["Family", "Genus", "Lang a", "Lang B", "Sound A",
+        writer.writerow(["Family", "Genus", "Lang A", "Lang B", "Sound A",
                          "Sound B", "Env A", "Env B", "Count"])
         for sounds in corresp_finder.corresps:
             A, B = sorted(sounds, key=lambda s:s.sound) # ensures we always have the same order.
@@ -473,6 +470,15 @@ def run(args):
     if args.model == "Coarse":
         metadata_dict["coarsening_removed"] = list(DEFAULT_CONFIG["remove"])
         metadata_dict["coarsening_changed"] = DEFAULT_CONFIG["change"]
+
+    ## TODO: export features with sounds.
+    ## TODO: export 5 examples for each sound
+
+    if args.model == "Coarse":
+        with open(output_prefix + '_coarsening.csv', 'w',
+                  encoding="utf-8") as csvfile:
+            writer = csv.writer(csvfile, delimiter=',', )
+            writer.writerows(coarse.as_table())
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:

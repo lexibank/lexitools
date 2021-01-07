@@ -1,5 +1,5 @@
 """
-Check the prosodic structure of a given dataset.
+Extract correspondences from a set of datasets.
 """
 
 from clldutils.clilib import add_format
@@ -23,6 +23,42 @@ import sys
 import json
 from lexitools.coarse_soundclass import Coarsen, DEFAULT_CONFIG
 
+
+LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
+            ('lexibank', 'allenbai'), ('lexibank', 'bdpa'),
+            ('lexibank', 'beidasinitic'), ('lexibank', 'birchallchapacuran'),
+            ('sequencecomparison', 'blustaustronesian'),
+            ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
+            ('lexibank', 'cals'), ('lexibank', 'castrosui'),
+            ('lexibank', 'castroyi'), ('lexibank', 'chaconarawakan'),
+            ('lexibank', 'chaconbaniwa'), ('lexibank', 'chaconcolumbian'),
+            ('lexibank', 'chenhmongmien'), ('lexibank', 'chindialectsurvey'),
+            ('lexibank', 'davletshinaztecan'), ('lexibank', 'deepadungpalaung'),
+            ('lexibank', 'dravlex'), ('lexibank', 'dunnaslian'),
+            ('sequencecomparison', 'dunnielex'), ('lexibank', 'galuciotupi'),
+            ('lexibank', 'gerarditupi'), ('lexibank', 'halenepal'),
+            ('lexibank', 'hantganbangime'),
+            ('sequencecomparison', 'hattorijaponic'),
+            ('sequencecomparison', 'houchinese'),
+            ('lexibank', 'hubercolumbian'), ('lexibank', 'ivanisuansu'),
+            ('lexibank', 'johanssonsoundsymbolic'),
+            ('lexibank', 'joophonosemantic'),
+            ('sequencecomparison', 'kesslersignificance'),
+            ('lexibank', 'kraftchadic'), ('lexibank', 'leekoreanic'),
+            ('lexibank', 'lieberherrkhobwa'), ('lexibank', 'lundgrenomagoa'),
+            ('lexibank', 'mannburmish'), ('lexibank', 'marrisonnaga'),
+            ('lexibank', 'mcelhanonhuon'), ('lexibank', 'mitterhoferbena'),
+            ('lexibank', 'naganorgyalrongic'), ('lexibank', 'northeuralex'),
+            ('lexibank', 'peirosaustroasiatic'),
+            ('lexibank', 'pharaocoracholaztecan'), ('lexibank', 'robinsonap'),
+            ('lexibank', 'sagartst'), ('lexibank', 'savelyevturkic'),
+            ('lexibank', 'sohartmannchin'),
+            ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
+            ('lexibank', 'transnewguineaorg'), ('lexibank', 'tryonsolomon'),
+            ('lexibank', 'walkerarawakan'), ('lexibank', 'walworthpolynesian'),
+            ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
+            ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
+            ('sequencecomparison', 'zhivlovobugrian')]
 
 class MockLexicore(object):
     """ Mock interface to lexicore datasets.
@@ -293,6 +329,8 @@ def register(parser):
     add_catalog_spec(parser, "glottolog")
     add_format(parser, default='pipe')
 
+    parser.description = run.__doc__
+
     parser.add_argument(
         '--dataset',
         action='store',
@@ -555,45 +593,15 @@ class Correspondences(object):
                         self.corresps[frozenset({A, B})] += 1
 
 
-LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
-            ('lexibank', 'allenbai'), ('lexibank', 'bdpa'),
-            ('lexibank', 'beidasinitic'), ('lexibank', 'birchallchapacuran'),
-            ('sequencecomparison', 'blustaustronesian'),
-            ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
-            ('lexibank', 'cals'), ('lexibank', 'castrosui'),
-            ('lexibank', 'castroyi'), ('lexibank', 'chaconarawakan'),
-            ('lexibank', 'chaconbaniwa'), ('lexibank', 'chaconcolumbian'),
-            ('lexibank', 'chenhmongmien'), ('lexibank', 'chindialectsurvey'),
-            ('lexibank', 'davletshinaztecan'), ('lexibank', 'deepadungpalaung'),
-            ('lexibank', 'dravlex'), ('lexibank', 'dunnaslian'),
-            ('sequencecomparison', 'dunnielex'), ('lexibank', 'galuciotupi'),
-            ('lexibank', 'gerarditupi'), ('lexibank', 'halenepal'),
-            ('lexibank', 'hantganbangime'),
-            ('sequencecomparison', 'hattorijaponic'),
-            ('sequencecomparison', 'houchinese'),
-            ('lexibank', 'hubercolumbian'), ('lexibank', 'ivanisuansu'),
-            ('lexibank', 'johanssonsoundsymbolic'),
-            ('lexibank', 'joophonosemantic'),
-            ('sequencecomparison', 'kesslersignificance'),
-            ('lexibank', 'kraftchadic'), ('lexibank', 'leekoreanic'),
-            ('lexibank', 'lieberherrkhobwa'), ('lexibank', 'lundgrenomagoa'),
-            ('lexibank', 'mannburmish'), ('lexibank', 'marrisonnaga'),
-            ('lexibank', 'mcelhanonhuon'), ('lexibank', 'mitterhoferbena'),
-            ('lexibank', 'naganorgyalrongic'), ('lexibank', 'northeuralex'),
-            ('lexibank', 'peirosaustroasiatic'),
-            ('lexibank', 'pharaocoracholaztecan'), ('lexibank', 'robinsonap'),
-            ('lexibank', 'sagartst'), ('lexibank', 'savelyevturkic'),
-            ('lexibank', 'sohartmannchin'),
-            ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
-            ('lexibank', 'transnewguineaorg'), ('lexibank', 'tryonsolomon'),
-            ('lexibank', 'walkerarawakan'), ('lexibank', 'walworthpolynesian'),
-            ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
-            ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
-            ('sequencecomparison', 'zhivlovobugrian')]
-
 
 def run(args):
     """Run the correspondence command.
+
+    Run with:
+
+        cldfbench lexitools.correspondences --clts-version v1.4.1 --model Coarse --cutoff 0.05 --threshold 1 --dataset lexicore
+
+    For details on the arguments, see `cldfbench lexitools.correspondences --help`.
 
     This loads all the requested datasets and searches for available sounds and attested
     correspondences. It output a series of files which start by a time-stamp,

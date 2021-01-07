@@ -167,7 +167,10 @@ class Sound:
 
 @dataclass
 class Word:
-    """ Represents one word in a specific language.
+    """ A word in a specific language and dataset.
+
+    A word is linked to a dataset row and carries its ID, so that we can refer back to
+    the data it originates from.
 
     Attributes:
         lang (Lang) : the language in which this token was observed

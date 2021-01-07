@@ -21,8 +21,7 @@ from importlib.util import find_spec
 from cldfbench import get_dataset
 import sys
 import json
-from lexitools.coarse_soundclass import Coarsen, DEFAULT_CONFIG
-
+from lexitools.coarse_soundclass import Coarsen
 
 LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
             ('lexibank', 'allenbai'), ('lexibank', 'bdpa'),
@@ -60,6 +59,7 @@ LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
             ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
             ('sequencecomparison', 'zhivlovobugrian')]
 
+
 class MockLexicore(object):
     """ Mock interface to lexicore datasets.
 
@@ -94,7 +94,8 @@ class MockLexicore(object):
 
         if needed_install:
             raise EnvironmentError("Some datasets were not installed. ",
-                                   "I have tried to install them, please re-run the command now.")
+                                   "I have tried to install them,",
+                                   "please re-run the command now.")
 
         self.datasets = {}
         for org, name in dataset_list:
@@ -156,7 +157,7 @@ class SoundCorrespsByGenera(object):
             language and concept. While there is usually only one, there may be more.
     """
 
-    def __init__(self, db, langgenera_path, log, concept_list=None,
+    def __init__(self, db, langgenera_path, concept_list=None,
                  sound_class=None, glottolog=None, asjp=False):
         """ Initialize the data by collecting, processing and organizing tokens.
 
@@ -235,15 +236,15 @@ class SoundCorrespsByGenera(object):
 
             try:
                 token = list(self._iter_phonemes(row))
-            except ValueError as e:
+            except ValueError:
                 continue  # unknown sounds
             if token == [""]: continue
             syllables = len(
                 lingpy.sequence.sound_classes.syllabify(token, output="nested"))
             gcode, family, genus = langs[row["Language_ID"]]
-            self.tokens[(gcode, concept)].add((tuple(token), syllables)) ## Create a token object or row object.
+            self.tokens[(gcode, concept)].add(
+                (tuple(token), syllables))  ## Create a token object or row object.
             self.lang_to_concept[gcode].add(concept)
-
 
     def _iter_phonemes(self, row):
         """ Iterate over pre-processed phonemes from a row's token.
@@ -266,7 +267,7 @@ class SoundCorrespsByGenera(object):
         # which means that tokens are not phonemes (ex:bodtkhobwa)
         # This is solved by re-tokenizing on the space...
         if self.asjp:
-            segments = row["Graphemes"][1:-1] # Ignore end and start symbols
+            segments = row["Graphemes"][1:-1]  # Ignore end and start symbols
         else:
             segments = row["Segments"]
 
@@ -374,7 +375,7 @@ class Correspondences(object):
 
     Attributes:
         args: the full args passed to the correspondences command.
-        data (MockLexicore): the lexicore dataset
+        data (SoundCorrespsByGenera): the lexicore dataset
         clts (pyclts.CLTS): a clts instance
         sca (dict): mapping of bipa sounds to SCA class (used for the cognate threshold).
         Item (namedtuple): A sound observed in a specific context and language.
@@ -389,7 +390,7 @@ class Correspondences(object):
 
         Args:
             args: the full args passed to the correspondences command.
-            data (MockLexicore): the lexicore dataset
+            data (SoundCorrespsByGenera): the lexicore dataset
             clts (pyclts.CLTS): a clts instance
         """
         self.args = args
@@ -493,6 +494,7 @@ class Correspondences(object):
             sA (str) and sB (str): aligned sounds from resp. almA and almB
             cA (str) and cB (str): contexts for resp. sA and sB
         """
+
         def to_categories(sequence):
             """Turn a sequence of sounds into a sequence of categories used in contexts"""
             for s in sequence:
@@ -507,10 +509,10 @@ class Correspondences(object):
 
         def get_context(cats, i, sound, left):
             """Return the context for a given sound."""
-            if cats[i] is None: # No context for null "-" and tones
+            if cats[i] is None:  # No context for null "-" and tones
                 return sound
             else:
-                right = next((c for c in cats[i+1:] if c is not None))
+                right = next((c for c in cats[i + 1:] if c is not None))
                 return left + sound + right
 
         catsA = list(to_categories(almA))
@@ -548,7 +550,8 @@ class Correspondences(object):
         Returns:
             scorer (dict): maps from pairs of sounds to score.
         """
-        def score(a,b):
+
+        def score(a, b):
             if a == b:
                 return 1
             ta = self.clts.bipa[a].type == "tone"
@@ -557,7 +560,8 @@ class Correspondences(object):
                 return -10
             else:
                 return -1
-        return {(a, b):score(a,b) for a, b in product(seqA, seqB)}
+
+        return {(a, b): score(a, b) for a, b in product(seqA, seqB)}
 
     def find_attested_corresps(self):
         """ Find all correspondences attested in our data.
@@ -585,13 +589,13 @@ class Correspondences(object):
             allowed = self.allowed_differences(s_A, s_B)
             if dist <= allowed:
                 self.total_cognates[(lA, lB)] += 1
-                almA, almB, sim = lingpy.nw_align(tokensA, tokensB, self.get_scorer(tokensA, tokensB))
+                almA, almB, sim = lingpy.nw_align(tokensA, tokensB,
+                                                  self.get_scorer(tokensA, tokensB))
                 for (sA, cA), (sB, cB) in self.iter_with_contexts(almA, almB):
                     if self.ignore.isdisjoint({sA, sB}):
                         A = self.Item(genus=genus, lang=lA, sound=sA, context=cA)
                         B = self.Item(genus=genus, lang=lB, sound=sB, context=cB)
                         self.corresps[frozenset({A, B})] += 1
-
 
 
 def run(args):
@@ -640,14 +644,19 @@ def run(args):
         def to_sound_class(sound):
             return str(clts.bipa[sound])
     elif args.model == "Coarse":
-        coarse = Coarsen(clts.bipa, DEFAULT_CONFIG)
+        coarse = Coarsen(clts.bipa, "src/lexitools/commands/default_coarsening.csv")
+
         def to_sound_class(sound):
             return coarse[sound]
     elif args.model == "ASJPcode":
         if args.dataset != "lexibank/asjp":
             raise ValueError("ASJPcode only possible with lexibank/asjp")
         full_asjp = True
-        def to_sound_class(sound): return sound # we will grab the graphemes column
+
+        def to_sound_class(sound):
+            return sound  # we will grab the graphemes column
+    else:
+        raise ValueError("Incorrect sound class model")
 
     ## This is a temporary fake "lexicore" interface
     dataset_list = LEXICORE if args.dataset == "lexicore" else [args.dataset.split("/")]
@@ -660,10 +669,11 @@ def run(args):
                                      args.glottolog.dir),
                                  asjp=full_asjp)
 
-    args.log.info('Loaded the wordlist ({} languages, {} genera, {} concepts kept)'.format(
-        len(data.lang_to_concept),
-        len(data.genera_to_lang),
-        len(data.concepts_subset)))
+    args.log.info(
+        'Loaded the wordlist ({} languages, {} genera, {} concepts kept)'.format(
+            len(data.lang_to_concept),
+            len(data.genera_to_lang),
+            len(data.concepts_subset)))
 
     corresp_finder = Correspondences(args, data, clts)
     available = corresp_finder.find_available()
@@ -678,7 +688,8 @@ def run(args):
         writer.writerow(["Family", "Genus", "Lang A", "Lang B", "Sound A",
                          "Sound B", "Env A", "Env B", "Count"])
         for sounds in corresp_finder.corresps:
-            A, B = sorted(sounds, key=lambda s:s.sound) # ensures we always have the same order.
+            A, B = sorted(sounds,
+                          key=lambda s: s.sound)  # ensures we always have the same order.
             count = corresp_finder.corresps[sounds]
             family = data.genera_to_family[A.genus]
             total = corresp_finder.total_cognates[(A.lang, B.lang)]
@@ -716,13 +727,8 @@ def run(args):
     metadata_dict["threshold_method"] = "normalized per syllable"
     metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
     metadata_dict["alignment_method"] = "T/non T penalized"
-    if args.model == "Coarse":
-        metadata_dict["coarsening_removed"] = list(DEFAULT_CONFIG["remove"])
-        metadata_dict["coarsening_changed"] = DEFAULT_CONFIG["change"]
 
-    ## TODO: export features with sounds.
     ## TODO: export 5 examples for each sound
-
     if args.model == "Coarse":
         with open(output_prefix + '_coarsening.csv', 'w',
                   encoding="utf-8") as csvfile:

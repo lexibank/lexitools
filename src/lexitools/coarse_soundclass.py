@@ -3,34 +3,27 @@
 """Coarsen sound classes"""
 import pyclts
 from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Set, Dict
+import csvw
 
 # Some CLTS sounds are composite
 COMPOSITE = (pyclts.models.Diphthong, pyclts.models.Cluster)
+CATEGORIES = {"consonant", "vowel", "cluster", "diphthong", "tone"}
 
-# Default configuration, used by the correspondence command in lexitools.
-DEFAULT_CONFIG = dict(
-    remove={'advanced', 'advanced-tongue-root', 'apical', 'aspirated', 'breathy',
-            'centralized', 'creaky', 'devoiced', 'ejective', 'glottalized', 'labialized',
-            'labio-palatalized', 'laminal', 'less-rounded', 'long', 'lowered',
-            'mid-centralized', 'mid-long', 'more-rounded',
-            # 'nasalized',
-            'non-syllabic',
-            'palatalized', 'pharyngealized', 'pre-aspirated', 'pre-glottalized',
-            'pre-labialized', 'pre-nasalized', 'pre-palatalized', 'primary-stress',
-            'raised', 'retracted', 'retracted-tongue-root','revoiced', 'rhotacized',
-            'secondary-stress', 'strong', 'syllabic', 'ultra-long', 'ultra-short',
-            'unreleased', 'velarized', 'with-frication', 'with-lateral-release',
-            'with-mid-central-vowel-release', 'with-nasal-release', 'with_downstep',
-            'with_extra-high_tone', 'with_extra-low_tone', 'with_falling_tone',
-            'with_global_fall', 'with_global_rise', 'with_high_tone', 'with_low_tone',
-            'with_mid_tone', 'with_rising_tone', 'with_upstep',
-             },
-    change={'alveolar': 'anterior', 'alveolo-palatal': 'palatal', 'close-mid': 'mid',
-          'dental': 'anterior', 'linguolabial': 'labial', 'nasal-click': 'click',
-          'near-back': 'back', 'near-close': 'close', 'near-front': 'front',
-          'near-open': 'open',
-          'open-mid': 'mid', 'palatal-velar': 'velar',
-          'post-alveolar': 'palatal', 'tap': 'vibrant', 'trill': 'vibrant'})
+
+@dataclass
+class CoarseningRules:
+    """ Set of coarsening rule for a category.
+
+    Attributes:
+        change : mapping of CLTS features to their coarse replacements.
+            Replacements need not be CLTS features, but it makes things nicer if they are.
+        remove : set of CLTS features to remove.
+    """
+    remove: Set[str] = field(default_factory=set)
+    change: Dict[str, str] = field(default_factory=dict)
+
 
 class Coarsen(object):
     """Coarsens CLTS sounds by removing and replacing some features.
@@ -44,22 +37,23 @@ class Coarsen(object):
     The class carefully picks the most simple label for each set of sounds.
 
     For example, the default configuration given in this file creates a coarse sound "dz",
-    with coarsened features "sibilant anterior voiced affricate consonant",
-    and which result  from coarsening the set of BIPA sounds:
-     `{'dz', 'dzː', 'dz̪', 'dz̪ː', 'dzʰ', 'ˈʣʲ', 'ˈʣ', 'ⁿdz', 'ⁿdzʱ', 'dzʱ', 'dzʲ', 'dzˤ'}`
+    with coarsened features :
+        `phonation=voiced category=consonant sibilancy=sibilant
+         manner=affricate place=anterior`
+    and which results from coarsening the set of BIPA sounds:
+        `{'dz', 'dzː', 'dz̪', 'dz̪ː', 'dzʰ', 'ˈʣʲ', 'ˈʣ',
+         'ⁿdz', 'ⁿdzʱ', 'dzʱ', 'dzʲ', 'dzˤ'}`
 
     Attributes:
         bipa (pyclts.TranscriptionSystem): CLTS's BIPA system
-        change (dict): mapping of CLTS features to their coarse replacements.
-            Replacements need not be CLTS features, but it makes things nicer if they are.
-        remove (set): set of CLTS features to remove.
+        rules (dict of str to CoarseningRules): specification of the coarsening rules
         labels (dict): mapping of coarse feature frozensets to the corresponding coarse sound string.
         cache (dict): direct mapping of BIPA sound strings to coarse sound string.
     """
 
     cache = {}
 
-    def __init__(self, bipa, config):
+    def __init__(self, bipa, config_path):
         """
         Coarsen sounds from BIPA according to a configuation.
 
@@ -68,41 +62,74 @@ class Coarsen(object):
          Other BIPA sounds may be encountered after initialization,
          for which the coarse sound will be computed on the fly.
 
+
+        The config file has the following shape, with 0 meaning a value deletion:
+
+        ~~~
+            TYPE,FEATURE,VALUE,ALTERED_VALUE
+            vowel,relative_articulation,centralized,0
+            vowel,relative_articulation,mid-centralized,0
+            vowel,centrality,near-back,back
+            vowel,centrality,near-front,front
+        ~~~
+
         Example:
-            >>> coarsen = Coarsen(clts.bipa, DEFAULT_CONFIG)
+            >>> coarsen = Coarsen(clts.bipa, "default_coarsening.py")
             >>> coarsen['dz̪']
             'dz'
 
         Args:
             bipa (pyclts.TranscriptionSystem): CLTS's BIPA system
-            config (dict): a dictionnary of shape `{"change": dict, "remove": set}`
+            config_path (str): a path to a csv file for the config.
 
         """
         self.bipa = bipa
-        self.change = config["change"]
-        self.remove = config["remove"]
-        self.labels = {} # coarse feature set -> coarse string
-        self.cache = {} # bipa string -> coarse string
+        self.rules = self._parse_config(config_path)
+        self.labels = {}  # coarse feature set -> coarse string
+        self.cache = {}  # bipa string -> coarse string
 
         # Construct a dict of coarse feature set -> all listed bipa sounds resulting in this set
         sounds = defaultdict(list)
         for sound in self.bipa.sounds:
             sound = self.bipa[sound]
             if isinstance(sound, COMPOSITE):
-                coarse_f = self.coarsen_features(sound.from_sound.featureset)
+                coarse_f = self.get_coarse_features(sound.from_sound)
                 sounds[coarse_f].append(sound.from_sound)
-                coarse_f = self.coarsen_features(sound.to_sound.featureset)
+                coarse_f = self.get_coarse_features(sound.to_sound)
                 sounds[coarse_f].append(sound.to_sound)
             else:
-                coarse_f = self.coarsen_features(sound.featureset)
+                coarse_f = self.get_coarse_features(sound)
                 sounds[coarse_f].append(sound)
 
         # Populate coarsened and cache
         for f in sounds:
-            name = self._create_label(f,sounds[f])
+            name = self._create_label(f, sounds[f])
             self.labels[f] = str(name)
             for s in sounds[f]:
-                self.cache[str(s)] = str(name) # Instead, first try for the name
+                self.cache[str(s)] = str(name)  # Instead, first try for the name
+
+    def _parse_config(self, config_path):
+        """ Parse a configuration table to generate coarse rules per category.
+
+        Args:
+            config_path: path to the config file.
+
+        Returns:
+            dict of categories to CoarseningRules
+        """
+        config = {}
+        with csvw.UnicodeDictReader(config_path, delimiter=",") as reader:
+            for row in reader:
+                cat = row["TYPE"]
+                f, v, v2 = row["FEATURE"], row["VALUE"], row["ALTERED_VALUE"]
+                if cat not in config:
+                    config[cat] = CoarseningRules()
+                rules = config[cat]
+                if v2 == "0":
+                    rules.remove.add((f,v))
+                else:
+                    rules.change[(f,v)] = (f, v2)
+        return config
 
     def _create_label(self, features, bipa_sounds):
         """ Create a label for a coarse sound.
@@ -121,25 +148,24 @@ class Coarsen(object):
             'ɹ'
 
         Args:
-            features (frozenset): coarse feature set which defines a coarse sound.
+            features (frozenset): coarse feature-values which defines a coarse sound.
             bipa_sounds (iterable of str): iterable of bipa strings which result in this coarse sound.
 
         Returns: a bipa sound which should serve as an alias for this feature set.
         """
-        categories = {"consonant", "vowel", "cluster", "diphthong", "tone"}
-        cat = categories & features
-        other_features = features - cat
-        feature_str = " ".join(other_features) + " " + " ".join(cat)
+        feature_str = " ".join(v for f, v in features if f != "category")
+        feature_str += " " + dict(features)["category"]
         candidates = []
         try:
             bipa_label = self.bipa[feature_str]
-            f = bipa_label.featureset
-            if bipa_label in bipa_sounds or self.coarsen_features(f) == features:
+            f = self.get_coarse_features(bipa_label)
+            if bipa_label in bipa_sounds or f == features:
                 candidates.append(bipa_label)
-        except: pass
-        short_label = min(bipa_sounds, key=lambda s:(len(str(s)), len(s.featureset)))
+        except:
+            pass
+        short_label = min(bipa_sounds, key=lambda s: (len(str(s)), len(s.featureset)))
         candidates.append(short_label)
-        return min(candidates, key=lambda s:(len(str(s)),len(s.featureset)))
+        return min(candidates, key=lambda s: (len(str(s)), len(s.featureset)))
 
     def __getitem__(self, item):
         """ Get a coarse sound string from a BIPA sound string.
@@ -166,16 +192,16 @@ class Coarsen(object):
         except KeyError:
             sound = self.bipa[item]
             if isinstance(sound, pyclts.models.UnknownSound):
-                raise ValueError("Unknown sound "+item)
+                raise ValueError("Unknown sound " + item)
             if isinstance(sound, COMPOSITE):
                 sa = self.coarsen_sound(sound.from_sound)
                 sb = self.coarsen_sound(sound.to_sound)
-                new_sound = self.bipa[sa+sb]
+                new_sound = self.bipa[sa + sb]
                 if not isinstance(new_sound, COMPOSITE + (pyclts.models.UnknownSound,)):
                     # we reduced this into a simple sound, needs further coarsening
                     coarse_sound = self[str(new_sound)]
                 else:
-                    coarse_sound = sa+sb
+                    coarse_sound = sa + sb
             else:
                 coarse_sound = self.coarsen_sound(sound)
             self.cache[item] = coarse_sound
@@ -195,29 +221,39 @@ class Coarsen(object):
         Returns:
             coarse (str): a coarse sound label
         """
-        f = self.coarsen_features(simple_sound.featureset)
+        f = self.get_coarse_features(simple_sound)
         try:
             return self.labels[f]
         except KeyError:
             self.labels[f] = self._create_label(f, {simple_sound})
             return str(simple_sound)
 
-    def coarsen_features(self, featureset):
-        """ Coarsen BIPA features.
+    def get_coarse_features(self, sound):
+        """ Get Coarse features from a BIPA  sound.
 
         Args:
-            featureset (frozenset): BIPA features defining a BIPA sound.
+            sound (pyclts.Sound): BIPA sound.
 
         Returns:
-            coarse (frozenset): Coarse features defining a coarse sound.
+            coarse (frozenset): Coarse features-value pairs defining a coarse sound.
 
         """
-        features = set(featureset) - self.remove
-        for f in list(features):
-            if f in self.change:
-                features.remove(f)
-                features.add(self.change[f])
-        return frozenset(features)
+        cat = sound.type
+        try:
+            features = set(sound.featuredict.items())
+        except:
+            features = set()
+        if cat in self.rules:
+            remove = self.rules[cat].remove
+            change = self.rules[cat].change
+            features = features - remove
+
+            for (f, v) in features:
+                if (f, v) in change:
+                    features.remove((f, v))
+                    features.add(change[(f,v)])
+        features.add(("category", cat))
+        return frozenset({(f,v) for (f,v) in features if v is not None})
 
     def as_table(self):
         """ Describe all known sounds as a table, ready for csv export.
@@ -227,7 +263,8 @@ class Coarsen(object):
         The columns are:
             - "BIPA": the list of known BIPA sounds which result in this coarse sound.
             - "Coarse": the label of this coarse sound
-            - "Coarse features": the features which define this coarse sound
+            - "Coarse features": the features and values which define this coarse sound
+                (features and values are separated by "=", as in "height=close").
 
         Returns:
             rows (list of list): list of known coarse sounds and their BIPA counterparts.
@@ -236,9 +273,10 @@ class Coarsen(object):
         for bipa in self.cache:
             coarse = self.cache[bipa]
             reversed_cache[coarse].append(bipa)
-        rows = [["BIPA","Coarse","Coarse features"]]
+        rows = [["BIPA", "Coarse", "Coarse features"]]
         for fs in self.labels:
             coarse = self.labels[fs]
             all_bipa = reversed_cache[coarse]
-            rows.append([" ".join(all_bipa),coarse, " ".join(fs)])
+            rows.append(
+                [" ".join(all_bipa), coarse, " ".join(f + "=" + v for f, v in fs)])
         return rows

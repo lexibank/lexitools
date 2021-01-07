@@ -66,11 +66,11 @@ class Coarsen(object):
         The config file has the following shape, with 0 meaning a value deletion:
 
         ~~~
-            TYPE,FEATURE,VALUE,ALTERED_VALUE
-            vowel,relative_articulation,centralized,0
-            vowel,relative_articulation,mid-centralized,0
-            vowel,centrality,near-back,back
-            vowel,centrality,near-front,front
+        TYPE,FEATURE,VALUE,ALTERED_FEATURE,ALTERED_VALUE,COMMENT
+        vowel,relative_articulation,centralized,relative_articulation,0,
+        vowel,relative_articulation,mid-centralized,relative_articulation,0,
+        vowel,centrality,near-back,centrality,back,
+        vowel,centrality,near-front,centrality,front,
         ~~~
 
         Example:
@@ -121,14 +121,15 @@ class Coarsen(object):
         with csvw.UnicodeDictReader(config_path, delimiter=",") as reader:
             for row in reader:
                 cat = row["TYPE"]
-                f, v, v2 = row["FEATURE"], row["VALUE"], row["ALTERED_VALUE"]
+                f, v =  row["FEATURE"], row["VALUE"]
+                f2, v2 = row["ALTERED_FEATURE"], row["ALTERED_VALUE"]
                 if cat not in config:
                     config[cat] = CoarseningRules()
                 rules = config[cat]
                 if v2 == "0":
                     rules.remove.add((f,v))
                 else:
-                    rules.change[(f,v)] = (f, v2)
+                    rules.change[(f,v)] = (f2, v2)
         return config
 
     def _create_label(self, features, bipa_sounds):

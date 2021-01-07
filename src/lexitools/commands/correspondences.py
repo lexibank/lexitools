@@ -25,17 +25,40 @@ from lexitools.coarse_soundclass import Coarsen, DEFAULT_CONFIG
 
 
 class MockLexicore(object):
-    """This is a mock to access the data without waiting on the Lexibank SQL project,
-    but with a reasonable interface so that we can plug in the correct interface soon with little effort."""
+    """ Mock interface to lexicore datasets.
+
+    This loads a list of datasets. If not installed, it tries to pip install them,
+    then the script needs to be re-ran. This is a temporary fix in order to use Lexicore
+    before it really exists. The interface was agreed upon so that we can plug  in the
+    correct interface soon with little effort.
+
+    Attributes:
+        datasets (dict of str to cldfbench.Dataset): maps dataset names to Dataset objects.
+    """
 
     def __init__(self, dataset_list):
+        """ Load all datasets from a list of dataset indentifiers, or install them.
+
+        Note: this does NOT update installed datasets which are out of date.
+
+        Args:
+            dataset_list (list): list of dataset identifiers. Each identifier is a 2-tuple
+                of a github organization name ("lexibank" or "sequencecomparison" in most
+                cases) and a lexibank git repository name (such as "cals").
+        """
         # see https://github.com/chrzyki/snippets/blob/main/lexibank/install_datasets.py
         egg_pattern = "git+https://github.com/{org}/{name}.git#egg=lexibank_{name}"
+        needed_install = False
         for org, name in dataset_list:
             if find_spec("lexibank_" + name) is None:
                 args = [sys.executable, "-m", "pip", "install",
                         "-e", egg_pattern.format(org=org, name=name)]
                 subprocess.run(args)
+                needed_install = True
+
+        if needed_install:
+            raise EnvironmentError("Some datasets were not installed. ",
+                                   "I have tried to install them, please re-run the command now.")
 
         self.datasets = {}
         for org, name in dataset_list:
@@ -48,12 +71,29 @@ class MockLexicore(object):
             raise Exception("No dataset loaded")
 
     def iter_table(self, table_name):
+        """ Iter on the rows of a specific table, across all loaded datasets.
+
+        Args:
+            table_name (str): name of a CLDF Wordlist table.
+
+        Yields:
+            rows from all datasets, with an additional "dataset" field indicating the name
+            of the dataset from which the row originates.
+        """
         for name, ds in self.datasets.items():
             for row in ds[table_name]:
                 row["dataset"] = name
                 yield row
 
     def get_table(self, table_name):
+        """ Return all the rows of a specific tablee, across all loaded datasets.
+
+        Args:
+            table_name (str): name of a CLDF Wordlist table.
+
+        Returns:
+            list of rows
+        """
         return list(self.iter_table(table_name))
 
 

@@ -593,6 +593,31 @@ LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
 
 
 def run(args):
+    """Run the correspondence command.
+
+    This loads all the requested datasets and searches for available sounds and attested
+    correspondences. It output a series of files which start by a time-stamp,
+    then "_sound_correspondences_" and end in:
+
+    `_available.csv`: a csv table of available sounds. The header row is:
+        `Family,Genus,Sound A,Sound B`. The order of Sound A and
+        Sound B is not meaningful, we do not duplicate A/B and B/A.
+    `_coarsening.csv`: output only if run with the model "Coarse". This is a table of all
+        known coarse sounds.
+    `_concepts_intersection.csv`: a csv table giving the number of common concepts
+        in the data, and of concepts kept, for each pair of languages A and B.
+        The header row is `Lang A,Lang B,Common concepts,Kept concepts`.
+        The order of Lang A and Lang B is not meaningful, we do not duplicate A/B and B/A.
+    `_counts.csv`: a csv table recording correspondences. The header row is:
+    `Family,Genus,Lang A,Lang B,Sound A,Sound B,Env A,Env B,Count`.
+        The order of languages A/B and sounds A/B is not meaningful,
+        we do not duplicate A/B and B/A. Env A and B are the environments in which sounds
+        were observed (their contexts).
+    `_sound_errors.csv`: records sounds that raised errors in CLTS. The corresponding
+        tokens have been ignored by the program. The headers for this table is
+        `Dataset,Language_ID,Sound,Token,ID`.
+    `_metadata.json`: a json file recording the input parameters and all relevant metadata.
+    """
     langgenera_path = "./src/lexitools/commands/lang_genera-v1.0.0.tsv"
     clts = args.clts.from_config().api
 

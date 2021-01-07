@@ -278,9 +278,13 @@ class SoundCorrespsByGenera(object):
 
         for row in progressbar(db.iter_table('FormTable'),
                                desc="Loading data..."):
+
+            if row.get("Loan", None) is None: continue # Ignore loan words
+
             concept = concepts[row["Parameter_ID"]]
             if concept not in self.concepts_subset or \
-                    row["Language_ID"] not in langs or row["Segments"] is None:
+                    row["Language_ID"] not in langs or \
+                    row["Segments"] is None:
                 continue
 
             try:
@@ -291,12 +295,12 @@ class SoundCorrespsByGenera(object):
             syllables = len(lingpy.sequence.sound_classes.syllabify(token,
                                                                     output="nested"))
             lang = langs[row["Language_ID"]]
+
+            # TODO: add and use cognate information ?
             word = Word(lang=lang, syllables=syllables,
                        token=token, concept=concept, id=row["ID"],
                        original_token=" ".join(row["Segments"]), dataset=row["dataset"])
 
-            # TODO: add cognates
-            # TODO: ignore Loans (row["Loan"] exists at least in some datasets)
             self.data[(lang, concept)][" ".join(token)].append(word)
             self.lang_to_concept[lang].add(concept)
 

@@ -98,9 +98,48 @@ class MockLexicore(object):
 
 
 class SoundCorrespsByGenera(object):
+    """ Loads lexibank data, organized by genera, to facilitate the counting of correspondences.
+
+    Attributes:
+        sound_class (func): a function which associates a class of sounds to any BIPA
+            sound string.
+        lang_to_genera (dict): a mapping of glottocodes (representing languages) to
+            genera identifiers. This is loaded from Tiago Tresoldi's langgenera.
+        genera_to_lang (defaultdict): the inverse mapping, only for languages encountered
+            in our data.
+        genera_to_family (dict): mapping from genera names to family names for genera
+            encountered in our data.
+        errors (list of list): table which summarizes errors encountered in tokens.
+        asjp (bool): whether the only dataset is ASJP, in which case we will extract
+            Graphemes rather than Segments.
+        concepts_intersection (Counter): Counts the number of distinct concepts kept
+            for each pair of languages encountered in a genera.
+        concepts_subset (set): the set of all concepts which will be kept.
+        lang_to_concept (defaultdict): mapping of glottocodes to concepts.
+        tokens (defaultdict): mapping of (glottocode, concept) to a set of tokens for this
+            language and concept. While there is usually only one, there may be more.
+    """
 
     def __init__(self, db, langgenera_path, log, concept_list=None,
                  sound_class=None, glottolog=None, asjp=False):
+        """ Initialize the data by collecting, processing and organizing tokens.
+
+        Iterates over the database, to:
+        - Identify genera and family name for all languages
+        - If specified, restrict data to a specific list of concepts.
+        - Pre-process tokens to replace sounds by sound classes and count syllables
+        - Make note of any tokens which result in errors.
+
+        Args:
+            db (MockLexicore): Lexicore database
+            langgenera_path (str): path to a tsv export of langgenera
+            concept_list (str): name of a concepticon concept list
+            sound_class (func): a function which associates a class of sounds to any BIPA
+            sound string.
+            glottolog (pyglottolog.Glottolog): Glottolog instance to retrieve family names.
+            asjp (bool): whether the only dataset is ASJP, in which case we will extract
+            Graphemes rather than Segments.
+        """
         self.sound_class = sound_class
 
         with csvw.UnicodeDictReader(langgenera_path, delimiter="\t") as reader:
@@ -166,18 +205,32 @@ class SoundCorrespsByGenera(object):
             syllables = len(
                 lingpy.sequence.sound_classes.syllabify(token, output="nested"))
             gcode, family, genus = langs[row["Language_ID"]]
-            self.tokens[(gcode, concept)].add((tuple(token), syllables))
+            self.tokens[(gcode, concept)].add((tuple(token), syllables)) ## Create a token object or row object.
             self.lang_to_concept[gcode].add(concept)
 
-        log.info(r"Total number of concepts kept: {}".format(
-            len(self.concepts_subset)))
 
     def _iter_phonemes(self, row):
+        """ Iterate over pre-processed phonemes from a row's token.
+
+        The phonemes are usually from the "Segments" column, except for ASJP data
+        where we retrieve them from "Graphemes".
+
+        We pre-process by:
+            - re-tokenizing on spaces, ignoring empty segments
+            - selecting the second element when there is a slash
+            - using the sound_class attribute function to obtain sound classes
+
+        Args:
+            row (dict): dict of column name to value
+
+        Yields:
+            successive sound classes in the row's word.
+        """
         # In some dataset, the separator defined in the metadata is " + ",
         # which means that tokens are not phonemes (ex:bodtkhobwa)
         # This is solved by re-tokenizing on the space...
         if self.asjp:
-            segments = row["Graphemes"][1:-1]
+            segments = row["Graphemes"][1:-1] # Ignore end and start symbols
         else:
             segments = row["Segments"]
 
@@ -193,6 +246,18 @@ class SoundCorrespsByGenera(object):
                 raise e
 
     def iter_candidates(self):
+        """ Iterate over word pair candidates.
+
+        Across all datasets, inside each genus, we consider all token
+        pairs for the same concept in all language pairs.
+
+        Yields:
+            tuples of `genus, (langA, tA, sA), (langB, tB, sB)`
+                genus (str): genus name
+                langA (str) and langB (str): glottocodes for the two languages
+                tA (list of str) and tB (list of str): the two tokens
+                sA (int) and sB (int): the syllable count for each token
+        """
         for genus in progressbar(self.genera_to_lang, desc="Genera"):
             langs = self.genera_to_lang[genus]
             lang_pairs = combinations(langs, r=2)
@@ -211,6 +276,11 @@ class SoundCorrespsByGenera(object):
                         yield genus, (langA, tA, sA), (langB, tB, sB)
 
     def __iter__(self):
+        """Iterate over the tokens.
+
+        Yields:
+            for all known tokens, its genus, language glottocode, concept, and the token itself.
+        """
         for lang, concept in self.tokens:
             genus = self.lang_to_genera[lang]
             for token, syll_count in self.tokens[(lang, concept)]:
@@ -262,8 +332,28 @@ def register(parser):
 
 
 class Correspondences(object):
+    """Extract sound correspondences.
+
+    Attributes:
+        args: the full args passed to the correspondences command.
+        data (MockLexicore): the lexicore dataset
+        clts (pyclts.CLTS): a clts instance
+        sca (dict): mapping of bipa sounds to SCA class (used for the cognate threshold).
+        Item (namedtuple): A sound observed in a specific context and language.
+         Each correspondence is made of a pair of items.
+        corresps (Counter): counts occurences of pairs of Items (the keys are frozensets).
+        total_cognates (Counter): counts the number of cognates found for each pair of languages.
+        ignore (set): set of characters which should be ignored in tokens (markers, etc)
+    """
 
     def __init__(self, args, data, clts):
+        """ Initialization only records the arguments and defines the attributes.
+
+        Args:
+            args: the full args passed to the correspondences command.
+            data (MockLexicore): the lexicore dataset
+            clts (pyclts.CLTS): a clts instance
+        """
         self.args = args
         self.data = data
         self.clts = clts
@@ -274,6 +364,20 @@ class Correspondences(object):
         self.ignore = set("+*#_")
 
     def find_available(self):
+        """ Find which pairs of sounds from our data are available in each genera.
+
+        - A pair of two distinct sounds x,y are available in a genus if the genus has at
+         least two distinct languages A,B such that A has at least two occurences of x
+         and B has at least two occurences of y.
+        - A pair of a sound and a gap (x,-) is available in a genus if that genus has at
+         least two occurences of x.
+        - A pair of a sound and itself (x,x) is available in a genus if that genus has at
+         least two occurences of x.
+
+        Returns:
+            available (defaultdict): maps a pair of sounds (str) to a list of genera
+                in which the sound is available.
+        """
         # Available if there are 2 distinct languages with each at least 2 occurences
 
         self.args.log.info('Counting available corresp...')
@@ -310,15 +414,49 @@ class Correspondences(object):
         return available
 
     def differences(self, ta, tb):
+        """ Count meaningful differences between two tokens.
+
+        We take the edit distance between the sound classes in each token.
+        This allows any changes insides SCA's classes for free, that is, expected changes
+        are not penalized.
+
+        Args:
+            ta (list of str): a token
+            tb (list of str): another token
+
+        Returns:
+            diff (int): the edit distance between the sound classes in each token.
+        """
         ta = " ".join([self.sca[s] for s in ta])
         tb = " ".join([self.sca[s] for s in tb])
         return lingpy.edit_dist(ta, tb)
 
     def allowed_differences(self, sa, sb):
+        """ Compute the number of allowed differences for two syllable length.
+
+        Args:
+            sa (int): number of syllables in the first token
+            sb (int): number of syllables in the second token
+
+        Returns:
+            diff (int): a threshold above which two words of these lengths
+                can be considered cognates.
+        """
         return max(sa, sb) * self.args.threshold
 
-    def with_contexts(self, almA, almB):
-        def ctxt(sequence):
+    def iter_with_contexts(self, almA, almB):
+        """ Iterator of sounds and contexts for a pair of aligned tokens.
+
+        Args:
+            almA (list of str): aligned elements of the first token.
+            almB (list of str): aligned elements of the second token.
+
+        Yields: pair of aligned sounds and their contexts: `(sA, cA), (sB, cB)`
+            sA (str) and sB (str): aligned sounds from resp. almA and almB
+            cA (str) and cB (str): contexts for resp. sA and sB
+        """
+        def to_categories(sequence):
+            """Turn a sequence of sounds into a sequence of categories used in contexts"""
             for s in sequence:
                 cat = self.clts.bipa[s].type
                 if s == "-" or s in self.ignore or cat in {"tone"}:
@@ -329,43 +467,80 @@ class Correspondences(object):
                     yield "C"  # consonant or cluster
             yield "#"
 
-        def context(cats, i, sound, left):
+        def get_context(cats, i, sound, left):
+            """Return the context for a given sound."""
             if cats[i] is None: # No context for null "-" and tones
-                c = sound
-                prev = left
+                return sound
             else:
                 right = next((c for c in cats[i+1:] if c is not None))
-                c = left + sound + right
-                prev = cats[i]
-            return prev, c
+                return left + sound + right
 
-        catsA = list(ctxt(almA))
-        catsB = list(ctxt(almB))
+        catsA = list(to_categories(almA))
+        catsB = list(to_categories(almB))
         l = len(almA)
         prevA, prevB = "#", "#"
         for i in range(l):
             sA = almA[i]
-            prevA, cA = context(catsA, i, sA, prevA)
+            cA = get_context(catsA, i, sA, prevA)
+            prevA = prevA if catsA[i] is None else catsA[i]
             sB = almB[i]
-            prevB, cB = context(catsB, i, sB, prevB)
+            cB = get_context(catsB, i, sB, prevB)
+            prevB = prevB if catsB[i] is None else catsB[i]
             yield (sA, cA), (sB, cB)
 
     def get_scorer(self, seqA, seqB):
-        """Custom alignment scorer which penalizes tone alignments with non tones."""
+        """ Returns an alignment scorer which penalizes tone alignments with non tones.
+
+        The alignment scorer is a dict of a pair of sounds (a,b) to a score, for all pairs
+        of sounds across the two sequences.
+
+        Here, we set 1 for a match, -10 for mismatches involving a tone and something
+        that is not a t one, and -1 for any other mismatches and indels.
+
+        The reason to penalize tones is that having tones in the sequence of sounds is
+        only a notational trick, as they actually belong to a different tier.
+
+        For reference, the default lingpy scorer is:
+        >>> {(a, b): 1.0 if a == b else -1.0 for a, b in product(seqA, seqB)}
+
+        Args:
+            seqA (iterable of str): first sequence
+            seqB (iterable of str): second sequence
+
+        Returns:
+            scorer (dict): maps from pairs of sounds to score.
+        """
         def score(a,b):
             if a == b:
                 return 1
             ta = self.clts.bipa[a].type == "tone"
             tb = self.clts.bipa[b].type == "tone"
             if ta != tb:
-                # Alignments of tones with anything but tones is penalized
-                # as having tones in the sequence is only a notational trick
                 return -10
             else:
                 return -1
         return {(a, b):score(a,b) for a, b in product(seqA, seqB)}
 
     def find_attested_corresps(self):
+        """ Find all correspondences attested in our data.
+
+        - Inside each genus, we consider all pairs of tokens for the same concept across two
+        languages.
+        - If the tokens are similar enough, we assume that they are cognates. Otherwise
+         we reject the pair.
+        - We then align cognate pairs using our custom scorer.
+        - We record a correspondence for each aligned position, unless a sound is to be ignored.
+
+        We do not use a better cognate recognition method or cognate alignment function,
+        as these tend to insert too much knowledge, which we then find back identical in
+        correspondences.
+
+        TODO: (maybe)
+            - We do not yet align partial cognates separately.
+            - We do not yet use the gold cognate sets.
+
+        This functions returns None, but changes `self.corresps` in place.
+        """
         self.args.log.info('Counting attested corresp...')
         for genus, (lA, tokensA, s_A), (lB, tokensB, s_B) in self.data.iter_candidates():
             dist = self.differences(tokensA, tokensB)
@@ -373,7 +548,7 @@ class Correspondences(object):
             if dist <= allowed:
                 self.total_cognates[(lA, lB)] += 1
                 almA, almB, sim = lingpy.nw_align(tokensA, tokensB, self.get_scorer(tokensA, tokensB))
-                for (sA, cA), (sB, cB) in self.with_contexts(almA, almB):
+                for (sA, cA), (sB, cB) in self.iter_with_contexts(almA, almB):
                     if self.ignore.isdisjoint({sA, sB}):
                         A = self.Item(genus=genus, lang=lA, sound=sA, context=cA)
                         B = self.Item(genus=genus, lang=lB, sound=sB, context=cB)
@@ -445,16 +620,17 @@ def run(args):
     dataset_list = LEXICORE if args.dataset == "lexicore" else [args.dataset.split("/")]
 
     db = MockLexicore(dataset_list)
-    data = SoundCorrespsByGenera(db, langgenera_path, args.log,
+    data = SoundCorrespsByGenera(db, langgenera_path,
                                  sound_class=to_sound_class,
                                  concept_list=args.concepts,
                                  glottolog=pyglottolog.Glottolog(
                                      args.glottolog.dir),
                                  asjp=full_asjp)
 
-    args.log.info('Loaded the wordlist ({} languages, {} genera)'.format(
+    args.log.info('Loaded the wordlist ({} languages, {} genera, {} concepts kept)'.format(
         len(data.lang_to_concept),
-        len(data.genera_to_lang)))
+        len(data.genera_to_lang),
+        len(data.concepts_subset)))
 
     corresp_finder = Correspondences(args, data, clts)
     available = corresp_finder.find_available()

@@ -48,8 +48,6 @@ class Coarsen(object):
     and which result  from coarsening the set of BIPA sounds:
      `{'dz', 'dzː', 'dz̪', 'dz̪ː', 'dzʰ', 'ˈʣʲ', 'ˈʣ', 'ⁿdz', 'ⁿdzʱ', 'dzʱ', 'dzʲ', 'dzˤ'}`
 
-
-
     Attributes:
         bipa (pyclts.TranscriptionSystem): CLTS's BIPA system
         change (dict): mapping of CLTS features to their coarse replacements.

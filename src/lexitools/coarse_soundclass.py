@@ -249,7 +249,7 @@ class Coarsen(object):
             change = self.rules[cat].change
             features = features - remove
 
-            for (f, v) in features:
+            for (f, v) in list(features):
                 if (f, v) in change:
                     features.remove((f, v))
                     features.add(change[(f,v)])

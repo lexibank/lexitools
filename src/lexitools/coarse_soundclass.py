@@ -31,10 +31,25 @@ class Coarsen(object):
 
         # Populate coarsened and cache
         for f in sounds:
-            name = min(sounds[f], key=lambda s:len(s.featureset)) # pick the simples
+            name = self._create_label(f,sounds[f])
             self.names[f] = str(name)
             for s in sounds[f]:
-                self.cache[str(s)] = str(name)
+                self.cache[str(s)] = str(name) # Instead, first try for the name
+
+    def _create_label(self, features, sounds):
+        categories = {"consonant", "vowel", "cluster", "diphthong", "tone"}
+        cat = categories & features
+        other_features = features - cat
+        feature_str = " ".join(other_features) + " " + " ".join(cat)
+        candidates = []
+        try:
+            bipa_label = self.bipa[feature_str]
+            if bipa_label in sounds:
+                candidates.append(bipa_label)
+        except: pass
+        short_label = min(sounds, key=lambda s:(len(str(s)),len(s.featureset)))
+        candidates.append(short_label)
+        return min(candidates, key=lambda s:(len(str(s)),len(s.featureset)))
 
     def __getitem__(self, item):
         try:
@@ -51,14 +66,14 @@ class Coarsen(object):
                     # we reduced this into a simple sound, needs further coarsening
                     coarse_sound = self[str(new_sound)]
                 else:
-                    coarse_sound = str(self.bipa[sa+sb])
+                    coarse_sound = sa+sb
             else:
                 coarse_sound = self.coarsen_sound(sound)
             self.cache[item] = coarse_sound
             return coarse_sound
 
     def coarsen_sound(self, simple_sound):
-        f = self.coarsen_features(simple_sound)  # simple or complex sound
+        f = self.coarsen_features(simple_sound)
         try:
             return self.names[f]
         except KeyError:
@@ -72,6 +87,18 @@ class Coarsen(object):
                 features.remove(f)
                 features.add(self.change[f])
         return frozenset(features)
+
+    def as_table(self):
+        reversed_cache = defaultdict(list)
+        for bipa in self.cache:
+            coarse = self.cache[bipa]
+            reversed_cache[coarse].append(bipa)
+        rows = [["BIPA","Coarse","Coarse features"]]
+        for fs in self.names:
+            coarse = self.names[fs]
+            all_bipa = reversed_cache[coarse]
+            rows.append([" ".join(all_bipa),coarse, " ".join(fs)])
+        return rows
 
 DEFAULT_CONFIG = dict(
     remove={'advanced', 'advanced-tongue-root', 'apical', 'aspirated', 'breathy',
@@ -93,5 +120,6 @@ DEFAULT_CONFIG = dict(
     change={'alveolar': 'anterior', 'alveolo-palatal': 'palatal', 'close-mid': 'mid',
           'dental': 'anterior', 'linguolabial': 'labial', 'nasal-click': 'click',
           'near-back': 'back', 'near-close': 'close', 'near-front': 'front',
-          'near-open': 'open', 'open-mid': 'mid', 'palatal-velar': 'velar',
+          'near-open': 'open',
+          'open-mid': 'mid', 'palatal-velar': 'velar',
           'post-alveolar': 'palatal', 'tap': 'vibrant', 'trill': 'vibrant'})

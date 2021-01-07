@@ -86,18 +86,26 @@ class MockLexicore(object):
         """
         # see https://github.com/chrzyki/snippets/blob/main/lexibank/install_datasets.py
         egg_pattern = "git+https://github.com/{org}/{name}.git#egg=lexibank_{name}"
-        needed_install = False
+        successful_install = []
+        failed_install = []
         for org, name in dataset_list:
             if find_spec("lexibank_" + name) is None:
                 args = [sys.executable, "-m", "pip", "install",
                         "-e", egg_pattern.format(org=org, name=name)]
-                subprocess.run(args)
-                needed_install = True
+                res = subprocess.run(args)
+                if res.returncode == 0:
+                    successful_install.append(org+"/"+name)
+                else:
+                    failed_install.append(org+"/"+name)
 
-        if needed_install:
-            raise EnvironmentError("Some datasets were not installed. ",
-                                   "I have tried to install them,",
-                                   "please re-run the command now.")
+        if successful_install or failed_install:
+            msg = ["Some datasets were not installed."]
+            if successful_install:
+                msg.extend(["I installed:", ", ".join(successful_install), "."])
+            if failed_install:
+                msg.extend(["I failed to install: ", " ".join(failed_install),"."])
+            msg.extend("Please install any missing datasets and re-run the command.")
+            raise EnvironmentError(" ".join(msg))
 
         self.datasets = {}
         for org, name in dataset_list:

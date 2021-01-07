@@ -166,8 +166,8 @@ class Sound:
     context: str
 
 @dataclass
-class Row:
-    """ A row represents one word in a specific language.
+class Word:
+    """ Represents one word in a specific language.
 
     Attributes:
         lang (Lang) : the language in which this token was observed
@@ -202,9 +202,9 @@ class SoundCorrespsByGenera(object):
             for each pair of languages encountered in a genera.
         concepts_subset (set): the set of all concepts which will be kept.
         lang_to_concept (defaultdict): mapping of Lang to concepts.
-        data (defaultdict): mapping of (lang, concept) -> token string -> rows
+        data (defaultdict): mapping of (lang, concept) -> token string -> word instances
            A language can have more that one token for a specific
-         concept, and a single token can be found in more than one dataset. A row represents
+         concept, and a single token can be found in more than one dataset. A Word represents
          exactly one token in a given language and dataset.
     """
 
@@ -288,13 +288,13 @@ class SoundCorrespsByGenera(object):
             syllables = len(lingpy.sequence.sound_classes.syllabify(token,
                                                                     output="nested"))
             lang = langs[row["Language_ID"]]
-            row = Row(lang=lang, syllables=syllables,
-                      token=token, concept=concept, id=row["ID"],
-                      original_token=" ".join(row["Segments"]), dataset=row["dataset"])
+            word = Word(lang=lang, syllables=syllables,
+                       token=token, concept=concept, id=row["ID"],
+                       original_token=" ".join(row["Segments"]), dataset=row["dataset"])
 
             # TODO: add cognates
             # TODO: ignore Loans (row["Loan"] exists at least in some datasets)
-            self.data[(lang, concept)][" ".join(token)].append(row)
+            self.data[(lang, concept)][" ".join(token)].append(word)
             self.lang_to_concept[lang].add(concept)
 
     def _iter_phonemes(self, row):
@@ -360,12 +360,12 @@ class SoundCorrespsByGenera(object):
                 for concept in common_concepts:
                     for tokA, tokB in product(self.data[(langA, concept)],
                                                 self.data[(langB, concept)]):
-                        # Here we grab the first row, but there may be other rows,
+                        # Here we grab the first word, but there may be other words,
                         # if this token is documented in other datasets.
                         # So far we don't really need the information.
-                        rowA = self.data[(langA, concept)][tokA][0]
-                        rowB = self.data[(langB, concept)][tokB][0]
-                        yield rowA, rowB
+                        wordA = self.data[(langA, concept)][tokA][0]
+                        wordB = self.data[(langB, concept)][tokB][0]
+                        yield wordA, wordB
 
     def __iter__(self):
         """Iterate over the tokens.
@@ -375,7 +375,7 @@ class SoundCorrespsByGenera(object):
         """
         for lang, concept in self.data:
             for token in self.data[(lang, concept)]:
-                yield self.data[(lang, concept)][token][0] # also picking a single row
+                yield self.data[(lang, concept)][token][0] # also picking a single word
 
 
 def register(parser):
@@ -433,7 +433,7 @@ class Correspondences(object):
         clts (pyclts.CLTS): a clts instance
         sca (dict): mapping of bipa sounds to SCA class (used for the cognate threshold).
         counts (Counter): occurences for pairs of Sounds (the keys are frozensets).
-        counts (defaultdict): example source rows for pairs of sounds (the keys are frozensets).
+        examples (defaultdict): example source words for pairs of sounds (the keys are frozensets).
         total_cognates (Counter): counts the number of cognates found for each pair of languages.
         ignore (set): set of characters which should be ignored in tokens (markers, etc)
     """
@@ -450,9 +450,9 @@ class Correspondences(object):
         self.data = data
         self.clts = clts
         self.sca = self.clts.soundclasses_dict["sca"]
-        self.counts = Counter()  # frozenset({Sound, Sound}): count
-        self.examples = defaultdict(list)  # frozenset({Sound, Sound}): rows
-        self.total_cognates = Counter()  # (lgA, lgB) : count
+        self.counts = Counter()
+        self.examples = defaultdict(list)
+        self.total_cognates = Counter()
         self.ignore = set("+*#_")
 
     def find_available(self):
@@ -474,10 +474,10 @@ class Correspondences(object):
         self.args.log.info('Counting available corresp...')
 
         sounds_by_genera = defaultdict(lambda: defaultdict(Counter))
-        for row in self.data:
-            for sound in row.token:
+        for word in self.data:
+            for sound in word.token:
                 if sound not in "+*#_":  # spaces and segmentation symbols ignored
-                    sounds_by_genera[(row.lang.family, row.lang.genus)][sound][row.lang] += 1
+                    sounds_by_genera[(word.lang.family, word.lang.genus)][sound][word.lang] += 1
 
         available = list()
         for family, genus in list(sounds_by_genera):
@@ -636,25 +636,25 @@ class Correspondences(object):
         """
         self.args.log.info('Counting attested corresp...')
         exs_counts = Counter()
-        for rowA, rowB in self.data.iter_candidates():
-            tokensA, tokensB = rowA.token, rowB.token
+        for wordA, wordB in self.data.iter_candidates():
+            tokensA, tokensB = wordA.token, wordB.token
             dist = self.differences(tokensA, tokensB)
-            allowed = self.allowed_differences(rowA.syllables, rowB.syllables)
+            allowed = self.allowed_differences(wordA.syllables, wordB.syllables)
             if dist <= allowed:
-                self.total_cognates[(rowA.lang, rowB.lang)] += 1
+                self.total_cognates[(wordA.lang, wordB.lang)] += 1
                 almA, almB, sim = lingpy.nw_align(tokensA, tokensB,
                                                   self.get_scorer(tokensA, tokensB))
                 for (soundA, ctxtA), (soundB, ctxtB) in self.sounds_and_contexts(almA, almB):
                     if self.ignore.isdisjoint({soundA, soundB}):
-                        A = Sound(lang=rowA.lang, sound=soundA, context=ctxtA)
-                        B = Sound(lang=rowB.lang, sound=soundB, context=ctxtB)
+                        A = Sound(lang=wordA.lang, sound=soundA, context=ctxtA)
+                        B = Sound(lang=wordB.lang, sound=soundB, context=ctxtB)
                         event = frozenset({A, B})
                         self.counts[event] += 1
                         exs = self.examples[event]
-                        event_in_dataset = (A, rowA.dataset, B, rowB.dataset)
+                        event_in_dataset = (A, wordA.dataset, B, wordB.dataset)
                         if len(exs) < 5 and exs_counts[event_in_dataset] < 2:
                             exs_counts[event_in_dataset] += 1
-                            self.examples[event].append((rowA, rowB))
+                            self.examples[event].append((wordA, wordB))
 
 def run(args):
     """Run the correspondence command.

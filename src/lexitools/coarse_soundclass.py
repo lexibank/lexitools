@@ -74,7 +74,7 @@ class Coarsen(object):
         ~~~
 
         Example:
-            >>> coarsen = Coarsen(clts.bipa, "default_coarsening.py")
+            >>> coarsen = Coarsen(clts.bipa, "default_coarsening.csv")
             >>> coarsen['dz̪']
             'dz'
 

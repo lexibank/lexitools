@@ -1,6 +1,7 @@
 """
 Extract correspondences from a set of datasets.
 """
+from dataclasses import dataclass, asdict
 
 from clldutils.clilib import add_format
 from cldfbench.cli_util import add_catalog_spec
@@ -10,7 +11,7 @@ from cldfcatalog import Config
 
 import lingpy
 from itertools import combinations, product
-from collections import Counter, defaultdict, namedtuple
+from collections import Counter, defaultdict
 from pylexibank import progressbar
 import pyglottolog
 import csv
@@ -22,6 +23,7 @@ from cldfbench import get_dataset
 import sys
 import json
 from lexitools.coarse_soundclass import Coarsen
+from typing import List
 
 LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
             ('lexibank', 'allenbai'), ('lexibank', 'bdpa'),
@@ -134,27 +136,68 @@ class MockLexicore(object):
         return list(self.iter_table(table_name))
 
 
+@dataclass(eq=True, frozen=True)
+class Lang:
+    """ A Language has a name, a glottocode, a genus and a family."""
+    genus: str
+    glottocode: str
+    family: str
+    name: str
+
+@dataclass(eq=True, frozen=True)
+class Sound:
+    """ Sound in a correspondence, in a specific genus, language, and context.
+
+    Attributes:
+        sound (str) : the sound which was observed in a correspondence
+        lang (Lang) : the language in which this sound was observed
+        context (str) : the context in which this sound was observed
+    """
+    sound: str
+    lang: Lang
+    context: str
+
+@dataclass
+class Row:
+    """ A row represents one word in a specific language.
+
+    Attributes:
+        lang (Lang) : the language in which this token was observed
+        token (str): the token
+        concept (str): the concept denoted by the token (concepticon ID)
+        syllables (int): number of syllables in the token
+        original_token (str): the original lexibank token (from Segments)
+        dataset (str): the dataset where this token was recorded
+        id (str): the identifier for the row in the dataset's wordlist
+    """
+    lang: Lang
+    token: List[str]
+    concept: str
+    syllables: int
+    original_token: str
+    dataset: str
+    id: str
+
+
 class SoundCorrespsByGenera(object):
     """ Loads lexibank data, organized by genera, to facilitate the counting of correspondences.
 
     Attributes:
         sound_class (func): a function which associates a class of sounds to any BIPA
             sound string.
-        lang_to_genera (dict): a mapping of glottocodes (representing languages) to
-            genera identifiers. This is loaded from Tiago Tresoldi's langgenera.
-        genera_to_lang (defaultdict): the inverse mapping, only for languages encountered
-            in our data.
-        genera_to_family (dict): mapping from genera names to family names for genera
-            encountered in our data.
+        genera_to_lang (defaultdict): a mapping of each genus to Lang objects.
+            Genera are loaded from Tiago Tresoldi's langgenera.
         errors (list of list): table which summarizes errors encountered in tokens.
         asjp (bool): whether the only dataset is ASJP, in which case we will extract
             Graphemes rather than Segments.
         concepts_intersection (Counter): Counts the number of distinct concepts kept
             for each pair of languages encountered in a genera.
         concepts_subset (set): the set of all concepts which will be kept.
-        lang_to_concept (defaultdict): mapping of glottocodes to concepts.
-        tokens (defaultdict): mapping of (glottocode, concept) to a set of tokens for this
-            language and concept. While there is usually only one, there may be more.
+        lang_to_concept (defaultdict): mapping of Lang to concepts.
+        data (defaultdict): mapping of (lang, concept) -> token string -> rows
+           A language can have more that one token for a specific
+         concept, and a single token can be found in more than one dataset. A row represents
+         exactly one token in a given language and dataset.
     """
 
     def __init__(self, db, langgenera_path, concept_list=None,
@@ -180,7 +223,7 @@ class SoundCorrespsByGenera(object):
         self.sound_class = sound_class
 
         with csvw.UnicodeDictReader(langgenera_path, delimiter="\t") as reader:
-            self.lang_to_genera = {row['GLOTTOCODE']: row['GENUS'] for row in reader}
+            lang_to_genera = {row['GLOTTOCODE']: row['GENUS'] for row in reader}
 
         # Obtain glottocode and family:
         # family can be obtained from glottolog (this is slow) if glottolog is loaded
@@ -189,34 +232,29 @@ class SoundCorrespsByGenera(object):
         # this is less slow than calling .langoid(code) for each code
         langoids = glottolog.languoids_by_code()
         self.genera_to_lang = defaultdict(set)
-        self.genera_to_family = {}
         self.errors = [["Dataset", "Language_ID", "Sound", "Token", "ID"]]
         self.asjp = asjp
         self.concepts_intersection = Counter()
 
-        for row in progressbar(db.iter_table("LanguageTable"),
-                               desc="listing languages"):
-            family = row["Family"]
+        for row in progressbar(db.iter_table("LanguageTable"), desc="listing languages"):
             gcode = row["Glottocode"]
-            if gcode is None or gcode not in self.lang_to_genera:
+            if gcode is None or gcode not in lang_to_genera:
                 continue
-            id = row["ID"]
+            genus = lang_to_genera[gcode]
+            family = row["Family"]
             langoid = langoids.get(gcode, None)
             if langoid is not None and langoid.family is not None:
                 family = langoid.family.name
 
-            genus = self.lang_to_genera[gcode]
-            self.genera_to_lang[genus].add(gcode)
-            if genus not in self.genera_to_family:
-                self.genera_to_family[genus] = family
-            langs[id] = (gcode, family, genus)
+            lang = Lang(genus=genus, family=family, glottocode=gcode, name=row["Name"])
+            self.genera_to_lang[genus].add(lang)
+            langs[row["ID"]] = lang
 
         concepts = {row["ID"]: row["Concepticon_ID"] for row in
                     db.iter_table('ParameterTable')}
 
         if concept_list is not None:
-            concepticon = Concepticon(
-                Config.from_file().get_clone("concepticon"))
+            concepticon = Concepticon(Config.from_file().get_clone("concepticon"))
             concept_dict = concepticon.conceptlists[concept_list].concepts
             self.concepts_subset = {c.concepticon_id for c in
                                     concept_dict.values() if
@@ -225,7 +263,7 @@ class SoundCorrespsByGenera(object):
             self.concepts_subset = set(concepts.values())
 
         self.lang_to_concept = defaultdict(set)
-        self.tokens = defaultdict(set)
+        self.data = defaultdict(lambda:defaultdict(list))
 
         for row in progressbar(db.iter_table('FormTable'),
                                desc="Loading data..."):
@@ -236,15 +274,20 @@ class SoundCorrespsByGenera(object):
 
             try:
                 token = list(self._iter_phonemes(row))
-            except ValueError:
-                continue  # unknown sounds
+            except ValueError: continue  # unknown sounds
             if token == [""]: continue
-            syllables = len(
-                lingpy.sequence.sound_classes.syllabify(token, output="nested"))
-            gcode, family, genus = langs[row["Language_ID"]]
-            self.tokens[(gcode, concept)].add(
-                (tuple(token), syllables))  ## Create a token object or row object.
-            self.lang_to_concept[gcode].add(concept)
+
+            syllables = len(lingpy.sequence.sound_classes.syllabify(token,
+                                                                    output="nested"))
+            lang = langs[row["Language_ID"]]
+            row = Row(lang=lang, syllables=syllables,
+                      token=token, concept=concept, id=row["ID"],
+                      original_token=" ".join(row["Segments"]), dataset=row["dataset"])
+
+            # TODO: add cognates
+            # TODO: ignore Loans (row["Loan"] exists at least in some datasets)
+            self.data[(lang, concept)][" ".join(token)].append(row)
+            self.lang_to_concept[lang].add(concept)
 
     def _iter_phonemes(self, row):
         """ Iterate over pre-processed phonemes from a row's token.
@@ -307,10 +350,14 @@ class SoundCorrespsByGenera(object):
                 common_concepts = (concepts_A & concepts_B)
                 self.concepts_intersection[(langA, langB)] += len(common_concepts)
                 for concept in common_concepts:
-                    tokens_A = self.tokens[(langA, concept)]
-                    tokens_B = self.tokens[(langB, concept)]
-                    for (tA, sA), (tB, sB) in product(tokens_A, tokens_B):
-                        yield genus, (langA, tA, sA), (langB, tB, sB)
+                    for tokA, tokB in product(self.data[(langA, concept)],
+                                                self.data[(langB, concept)]):
+                        # Here we grab the first row, but there may be other rows,
+                        # if this token is documented in other datasets.
+                        # So far we don't really need the information.
+                        rowA = self.data[(langA, concept)][tokA][0]
+                        rowB = self.data[(langB, concept)][tokB][0]
+                        yield rowA, rowB
 
     def __iter__(self):
         """Iterate over the tokens.
@@ -318,10 +365,9 @@ class SoundCorrespsByGenera(object):
         Yields:
             for all known tokens, its genus, language glottocode, concept, and the token itself.
         """
-        for lang, concept in self.tokens:
-            genus = self.lang_to_genera[lang]
-            for token, syll_count in self.tokens[(lang, concept)]:
-                yield genus, lang, concept, token
+        for lang, concept in self.data:
+            for token in self.data[(lang, concept)]:
+                yield self.data[(lang, concept)][token][0] # also picking a single row
 
 
 def register(parser):
@@ -378,9 +424,8 @@ class Correspondences(object):
         data (SoundCorrespsByGenera): the lexicore dataset
         clts (pyclts.CLTS): a clts instance
         sca (dict): mapping of bipa sounds to SCA class (used for the cognate threshold).
-        Item (namedtuple): A sound observed in a specific context and language.
-         Each correspondence is made of a pair of items.
-        corresps (Counter): counts occurences of pairs of Items (the keys are frozensets).
+        counts (Counter): occurences for pairs of Sounds (the keys are frozensets).
+        counts (defaultdict): example source rows for pairs of sounds (the keys are frozensets).
         total_cognates (Counter): counts the number of cognates found for each pair of languages.
         ignore (set): set of characters which should be ignored in tokens (markers, etc)
     """
@@ -397,9 +442,9 @@ class Correspondences(object):
         self.data = data
         self.clts = clts
         self.sca = self.clts.soundclasses_dict["sca"]
-        self.corresps = Counter()  # frozenset({Item,Item}): count
+        self.counts = Counter()  # frozenset({Sound, Sound}): count
+        self.examples = defaultdict(list)  # frozenset({Sound, Sound}): rows
         self.total_cognates = Counter()  # (lgA, lgB) : count
-        self.Item = namedtuple("Item", ["genus", "lang", "sound", "context"])
         self.ignore = set("+*#_")
 
     def find_available(self):
@@ -414,22 +459,21 @@ class Correspondences(object):
          least two occurences of x.
 
         Returns:
-            available (defaultdict): maps a pair of sounds (str) to a list of genera
-                in which the sound is available.
+            available (list of lists): Inner lists are rows with [family, genus, soundA, soundB]
         """
         # Available if there are 2 distinct languages with each at least 2 occurences
 
         self.args.log.info('Counting available corresp...')
 
         sounds_by_genera = defaultdict(lambda: defaultdict(Counter))
-        for genus, lang, concept, token in self.data:
-            for sound in token:
+        for row in self.data:
+            for sound in row.token:
                 if sound not in "+*#_":  # spaces and segmentation symbols ignored
-                    sounds_by_genera[genus][sound][lang] += 1
+                    sounds_by_genera[(row.lang.family, row.lang.genus)][sound][row.lang] += 1
 
-        available = defaultdict(list)
-        for genus in sounds_by_genera:
-            freq = sounds_by_genera[genus]
+        available = list()
+        for family, genus in list(sounds_by_genera):
+            freq = sounds_by_genera[(family, genus)]
             n_sounds = len(freq)
             tot_sound_pairs = (n_sounds * (n_sounds - 1)) / 2
             sound_pairs = combinations(freq, r=2)
@@ -438,17 +482,16 @@ class Correspondences(object):
                 if sound_A != "-":  # No point in counting corresp between blank and itself
                     occ = {lg for lg in freq[sound_A] if freq[sound_A][lg] > 1}
                     if len(occ) > 1:
-                        available[(sound_A, sound_A)].append(genus)
+                        available.append([family, genus, sound_A, sound_A])
                     if len(occ) > 0:
-                        available[(sound_A, "-")].append(
-                            genus)  # Deletion of any available sound is available
+                        available.append([family, genus, sound_A, "-"])
 
             for sound_A, sound_B in progressbar(sound_pairs, total=tot_sound_pairs):
                 occ_A = {lg for lg in freq[sound_A] if freq[sound_A][lg] > 1}
                 occ_B = {lg for lg in freq[sound_B] if freq[sound_B][lg] > 1}
                 if occ_A and occ_B and len(occ_A | occ_B) > 1:
-                    sound_pair = tuple(sorted((sound_A, sound_B)))
-                    available[sound_pair].append(genus)
+                    sound_A, sound_B = tuple(sorted((sound_A, sound_B)))
+                    available.append([family, genus, sound_A, sound_B])
 
         return available
 
@@ -483,7 +526,7 @@ class Correspondences(object):
         """
         return max(sa, sb) * self.args.threshold
 
-    def iter_with_contexts(self, almA, almB):
+    def sounds_and_contexts(self, almA, almB):
         """ Iterator of sounds and contexts for a pair of aligned tokens.
 
         Args:
@@ -584,19 +627,26 @@ class Correspondences(object):
         This functions returns None, but changes `self.corresps` in place.
         """
         self.args.log.info('Counting attested corresp...')
-        for genus, (lA, tokensA, s_A), (lB, tokensB, s_B) in self.data.iter_candidates():
+        exs_counts = Counter()
+        for rowA, rowB in self.data.iter_candidates():
+            tokensA, tokensB = rowA.token, rowB.token
             dist = self.differences(tokensA, tokensB)
-            allowed = self.allowed_differences(s_A, s_B)
+            allowed = self.allowed_differences(rowA.syllables, rowB.syllables)
             if dist <= allowed:
-                self.total_cognates[(lA, lB)] += 1
+                self.total_cognates[(rowA.lang, rowB.lang)] += 1
                 almA, almB, sim = lingpy.nw_align(tokensA, tokensB,
                                                   self.get_scorer(tokensA, tokensB))
-                for (sA, cA), (sB, cB) in self.iter_with_contexts(almA, almB):
-                    if self.ignore.isdisjoint({sA, sB}):
-                        A = self.Item(genus=genus, lang=lA, sound=sA, context=cA)
-                        B = self.Item(genus=genus, lang=lB, sound=sB, context=cB)
-                        self.corresps[frozenset({A, B})] += 1
-
+                for (soundA, ctxtA), (soundB, ctxtB) in self.sounds_and_contexts(almA, almB):
+                    if self.ignore.isdisjoint({soundA, soundB}):
+                        A = Sound(lang=rowA.lang, sound=soundA, context=ctxtA)
+                        B = Sound(lang=rowB.lang, sound=soundB, context=ctxtB)
+                        event = frozenset({A, B})
+                        self.counts[event] += 1
+                        exs = self.examples[event]
+                        event_in_dataset = (A, rowA.dataset, B, rowB.dataset)
+                        if len(exs) < 5 and exs_counts[event_in_dataset] < 2:
+                            exs_counts[event_in_dataset] += 1
+                            self.examples[event].append((rowA, rowB))
 
 def run(args):
     """Run the correspondence command.
@@ -683,26 +733,35 @@ def run(args):
 
     output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
 
+    def format_ex(rows):
+        r1, r2 = rows
+        tok1 = " ".join(r1.token)
+        tok2 = " ".join(r2.token)
+        template = "{word} ([{original_token}] {dataset} {id})"
+
+        return template.format(word=tok1, **asdict(r1)) + "/" + \
+               template.format(word=tok2, **asdict(r2))
+
     with open(output_prefix + '_counts.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
         writer.writerow(["Family", "Genus", "Lang A", "Lang B", "Sound A",
-                         "Sound B", "Env A", "Env B", "Count"])
-        for sounds in corresp_finder.corresps:
+                         "Sound B", "Env A", "Env B", "Count", "Examples"])
+        for sounds in corresp_finder.counts:
             A, B = sorted(sounds,
                           key=lambda s: s.sound)  # ensures we always have the same order.
-            count = corresp_finder.corresps[sounds]
-            family = data.genera_to_family[A.genus]
+            count = corresp_finder.counts[sounds]
             total = corresp_finder.total_cognates[(A.lang, B.lang)]
             if count > max(2, args.cutoff * total):
-                writer.writerow([family, A.genus, A.lang, B.lang,
-                                 A.sound, B.sound, A.context, B.context, count])
+                examples = [format_ex(rows) for rows in corresp_finder.examples[sounds]]
+                examples = "; ".join(examples)
+                writer.writerow([A.lang.family, A.lang.genus,
+                                 A.lang.glottocode, B.lang.glottocode,
+                                 A.sound, B.sound, A.context, B.context, count,examples])
 
     with open(output_prefix + '_available.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
         writer.writerow(["Family", "Genus", "Sound A", "Sound B"])
-        for a, b in available:
-            for genus in available[(a, b)]:
-                writer.writerow([data.genera_to_family[genus], genus, a, b])
+        writer.writerows(available)
 
     with open(output_prefix + '_concepts_intersection.csv', 'w',
               encoding="utf-8") as csvfile:
@@ -711,7 +770,7 @@ def run(args):
         for lA, lB in data.concepts_intersection:
             concepts = data.concepts_intersection[(lA, lB)]
             kept = corresp_finder.total_cognates[(lA, lB)]
-            writer.writerow([lA, lB, concepts, kept])
+            writer.writerow([lA.glottocode, lB.glottocode, concepts, kept])
 
     metadata_dict = {"observation cutoff": args.cutoff,
                      "similarity threshold": args.threshold,
@@ -723,7 +782,7 @@ def run(args):
     metadata_dict["n_languages"] = len(data.lang_to_concept)
     metadata_dict["n_genera"] = len(data.genera_to_lang)
     metadata_dict["n_concepts"] = len(data.concepts_subset)
-    metadata_dict["n_tokens"] = len(data.tokens)
+    metadata_dict["n_tokens"] = len(data.data)
     metadata_dict["threshold_method"] = "normalized per syllable"
     metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
     metadata_dict["alignment_method"] = "T/non T penalized"

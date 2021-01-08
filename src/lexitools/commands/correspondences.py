@@ -524,8 +524,8 @@ class Correspondences(object):
         Returns:
             diff (int): the edit distance between the sound classes in each token.
         """
-        ta = " ".join([self.sca[s] for s in ta])
-        tb = " ".join([self.sca[s] for s in tb])
+        ta = [self.sca[s] for s in ta]
+        tb = [self.sca[s] for s in tb]
         return lingpy.edit_dist(ta, tb)
 
     def allowed_differences(self, sa, sb):

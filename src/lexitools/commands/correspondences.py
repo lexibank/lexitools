@@ -156,7 +156,7 @@ class FlyWeight(type):
         self.cache = {}
 
     def __call__(self, **kwargs):
-        id_ = frozenset([str(x) for x in kwargs.items()])
+        id_ = tuple(sorted(kwargs.items()))
         try: return self.cache[id_]
         except KeyError:
             self.cache[id_] = super().__call__(**kwargs)
@@ -472,10 +472,13 @@ class Correspondences(object):
         args: the full args passed to the correspondences command.
         data (SoundCorrespsByGenera): the lexicore dataset
         clts (pyclts.CLTS): a clts instance
-        sca (dict): mapping of bipa sounds to SCA class (used for the cognate threshold).
+        sca_cache (dict): maps bipa sounds to SCA class (used for the cognate threshold).
+        bipa_cache (dict): maps strings to bipa sounds.
         counts (Counter): occurences of pairs of Sounds (the keys are frozensets).
         examples (defaultdict): example source words for pairs of sounds (the keys are frozensets).
         total_cognates (Counter): counts the number of cognates found for each pair of languages.
+        tones (set): characters which denote tones. Allow for a fast identification.
+            (using calls to bipa is too slow)
     """
 
     def __init__(self, args, data, clts):
@@ -489,10 +492,41 @@ class Correspondences(object):
         self.args = args
         self.data = data
         self.clts = clts
-        self.sca = self.clts.soundclasses_dict["sca"]
+        self.sca_cache = {}
+        self.bipa_cache = {}
         self.counts = Counter()
         self.examples = defaultdict(list)
         self.total_cognates = Counter()
+        self.tones = set("⁰¹²³⁴⁵˥˦˧˨↓↑↗↘")
+
+    def bipa(self, item):
+        """ Caches calls to the bipa transcription system, as resolve_sound is too slow.
+
+        Args:
+            item: a string representing a sound
+
+        Returns:
+            bipa (Sound): the corresponding BIPA sound
+        """
+        try:
+            return self.bipa_cache[item]
+        except:
+            self.bipa_cache[item] = self.clts.bipa[item]
+            return self.bipa_cache[item]
+
+    def sca(self, item):
+        """ Caches calls to the SCA sound class system, as resolve_sound is too slow.
+        Args:
+            item: a string representing a sound
+
+        Returns:
+            sca (str): the corresponding SCA class
+        """
+        try:
+            return self.sca_cache[item]
+        except:
+            self.sca_cache[item] = self.clts.soundclasses_dict["sca"][item]
+            return self.sca_cache[item]
 
     def find_available(self):
         """ Find which pairs of sounds from our data are available in each genera.
@@ -555,8 +589,8 @@ class Correspondences(object):
         Returns:
             diff (int): the edit distance between the sound classes in each token.
         """
-        ta = [self.sca[s] for s in ta]
-        tb = [self.sca[s] for s in tb]
+        ta = [self.sca(s) for s in ta]
+        tb = [self.sca(s) for s in tb]
         return lingpy.edit_dist(ta, tb)
 
     def allowed_differences(self, sa, sb):
@@ -587,7 +621,7 @@ class Correspondences(object):
         def to_categories(sequence):
             """Turn a sequence of sounds into a sequence of categories used in contexts"""
             for s in sequence:
-                cat = self.clts.bipa[s].type
+                cat = self.bipa(s).type
                 if s == "-" or s in IGNORE or cat in {"tone"}:
                     yield None
                 elif cat in {"vowel", "diphthong"}:
@@ -643,9 +677,9 @@ class Correspondences(object):
         def score(a, b):
             if a == b:
                 return 1
-            ta = self.clts.bipa[a].type == "tone"
-            tb = self.clts.bipa[b].type == "tone"
-            if ta != tb:
+            a_cat = self.tones.isdisjoint(a)
+            b_cat = self.tones.isdisjoint(b)
+            if a_cat != b_cat:
                 return -10
             else:
                 return -1
@@ -787,6 +821,7 @@ def run(args):
 
     corresp_finder = Correspondences(args, data, clts)
     available = corresp_finder.find_available()
+
     corresp_finder.find_attested_corresps()
 
     now = time.strftime("%Y%m%d-%Hh%Mm%Ss")

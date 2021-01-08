@@ -36,11 +36,10 @@ class Coarsen(object):
     Coarsening maps sets of several CLTS sounds onto a single coarse sounds.
     The class carefully picks the most simple label for each set of sounds.
 
-    For example, the default configuration given in this file creates a coarse sound "dz",
-    with coarsened features :
+    For example, take a coarse sound with label "dz", defined by the coarsened features :
         `phonation=voiced category=consonant sibilancy=sibilant
          manner=affricate place=anterior`
-    and which results from coarsening the set of BIPA sounds:
+    and which could result from coarsening the set of BIPA sounds:
         `{'dz', 'dzː', 'dz̪', 'dz̪ː', 'dzʰ', 'ˈʣʲ', 'ˈʣ',
          'ⁿdz', 'ⁿdzʱ', 'dzʱ', 'dzʲ', 'dzˤ'}`
 
@@ -144,8 +143,9 @@ class Coarsen(object):
             with the least features.
 
         For example:
-            >>> self.create_label(frozenset({"approximant", "consonant",
-            ...                 "anterior", "voiced"}), {"ɹ", "ɹ̩", "ð̞", "ɹː", "ɹʲ", "ɹʰ"})
+            >>> self.create_label(frozenset({("manner","approximant"),
+            ...                   ("place","anterior"), ("phonation","voiced"),
+            ...                   ("category","consonant")}), {"ɹ", "ɹ̩", "ð̞"})
             'ɹ'
 
         Args:
@@ -243,7 +243,8 @@ class Coarsen(object):
         try:
             features = set(sound.featuredict.items())
         except:
-            features = set()
+            # markers do not have featuredicts
+            features = {("marker", str(sound))}
         if cat in self.rules:
             remove = self.rules[cat].remove
             change = self.rules[cat].change

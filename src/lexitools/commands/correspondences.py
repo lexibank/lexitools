@@ -145,24 +145,49 @@ class MockLexicore(object):
         """
         return list(self.iter_table(table_name))
 
+class FlyWeight(type):
+    """ This is a Flyweight metaclass.
+
+        This is used to cache objects, so that a single instance exists for a given set of
+        keyword arguments (in a dataclass). The Flyweight pattern is very memory efficient.
+    """
+    def __init__(self, *args):
+        super().__init__(args)
+        self.cache = {}
+
+    def __call__(self, **kwargs):
+        id_ = frozenset([str(x) for x in kwargs.items()])
+        try: return self.cache[id_]
+        except KeyError:
+            self.cache[id_] = super().__call__(**kwargs)
+            return self.cache[id_]
 
 @dataclass(eq=True, frozen=True)
-class Lang:
-    """ A Language has a name, a glottocode, a genus and a family."""
+class Lang(metaclass=FlyWeight):
+    """ A Language has a name, a glottocode, a genus and a family.
+
+        This class is FlyWeight: we don't want duplicate objects for the exact
+        same language.
+    """
+    __slots__ = ('genus', 'glottocode', 'family', 'name')
     genus: str
     glottocode: str
     family: str
     name: str
 
 @dataclass(eq=True, frozen=True)
-class Sound:
+class Sound(metaclass=FlyWeight):
     """ Sound in a correspondence, in a specific genus, language, and context.
+
+        This class is FlyWeight: we don't want duplicate objects for the exact
+        same sound in context.
 
     Attributes:
         sound (str) : the sound which was observed in a correspondence
         lang (Lang) : the language in which this sound was observed
         context (str) : the context in which this sound was observed
     """
+    __slots__ = ('sound', 'lang', 'context')
     sound: str
     lang: Lang
     context: str
@@ -183,6 +208,8 @@ class Word:
         dataset (str): the dataset where this token was recorded
         id (str): the identifier for the row in the dataset's wordlist
     """
+    __slots__ = ('lang', 'token', 'concept', 'syllables', 'original_token',
+                 'dataset', 'id')
     lang: Lang
     token: List[str]
     concept: str
@@ -302,7 +329,6 @@ class SoundCorrespsByGenera(object):
                                                                     output="nested"))
 
             lang = langs[row["Language_ID"]]
-
 
             # TODO: also add COGID
             word = Word(lang=lang, syllables=syllables,
@@ -447,7 +473,7 @@ class Correspondences(object):
         data (SoundCorrespsByGenera): the lexicore dataset
         clts (pyclts.CLTS): a clts instance
         sca (dict): mapping of bipa sounds to SCA class (used for the cognate threshold).
-        counts (Counter): occurences for pairs of Sounds (the keys are frozensets).
+        counts (Counter): occurences of pairs of Sounds (the keys are frozensets).
         examples (defaultdict): example source words for pairs of sounds (the keys are frozensets).
         total_cognates (Counter): counts the number of cognates found for each pair of languages.
     """
@@ -457,7 +483,7 @@ class Correspondences(object):
 
         Args:
             args: the full args passed to the correspondences command.
-            data (SoundCorrespsByGenera): the lexicore dataset
+            data (SoundCorrespsByGenera): the data
             clts (pyclts.CLTS): a clts instance
         """
         self.args = args
@@ -474,15 +500,14 @@ class Correspondences(object):
         - A pair of two distinct sounds x,y are available in a genus if the genus has at
          least two distinct languages A,B such that A has at least two occurences of x
          and B has at least two occurences of y.
-        - A pair of a sound and a gap (x,-) is available in a genus if that genus has at
-         least two occurences of x.
-        - A pair of a sound and itself (x,x) is available in a genus if that genus has at
-         least two occurences of x.
+        - A pair of a sound and a gap (x,-) is available in a genus if that genus has a
+        language with at least two occurences of x.
+        - A pair of a sound and itself (x,x) is available in a genus if that genus has a
+         language with at least two occurences of x.
 
         Returns:
             available (list of lists): Inner lists are rows with [family, genus, soundA, soundB]
         """
-        # Available if there are 2 distinct languages with each at least 2 occurences
 
         self.args.log.info('Counting available corresp...')
 

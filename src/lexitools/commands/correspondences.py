@@ -279,14 +279,18 @@ class SoundCorrespsByGenera(object):
         for row in progressbar(db.iter_table('FormTable'),
                                desc="Loading data..."):
 
-            if row.get("Loan", None) is None: continue # Ignore loan words
+            if row.get("Loan", ""): continue # Ignore loan words
 
             concept = concepts[row["Parameter_ID"]]
             if concept not in self.concepts_subset or \
                     row["Language_ID"] not in langs or \
-                    row["Segments"] is None:
+                    (not self.asjp and row["Segments"] is None) or \
+                    (self.asjp and row["Graphemes"] is None):
                 continue
 
+
+            # TODO: if it has COGIDS, split on morphemes
+            # TODO: add a Word for each morpheme + morpheme cogid
             try:
                 token = list(self._iter_phonemes(row))
             except ValueError: continue  # unknown sounds
@@ -296,7 +300,7 @@ class SoundCorrespsByGenera(object):
                                                                     output="nested"))
             lang = langs[row["Language_ID"]]
 
-            # TODO: add and use cognate information ?
+            # TODO: also add COGID
             word = Word(lang=lang, syllables=syllables,
                        token=token, concept=concept, id=row["ID"],
                        original_token=" ".join(row["Segments"]), dataset=row["dataset"])
@@ -621,23 +625,43 @@ class Correspondences(object):
 
         return {(a, b): score(a, b) for a, b in product(seqA, seqB)}
 
+    def are_cognate(self, wordA, wordB):
+        """ Test if two words are cognates.
+
+        We assume tokens are cognates if they are similar enough.
+        The similarity threshold is proportional to the number of syllables.
+        The distance is an edit distance over SCA strings.
+
+        TODO:
+            - Add option to swap this out for other methods.
+             Using a method which considers whole lists will require refactoring of
+             SoundCorrespsByGenera.
+            - Use the gold cognate sets in COGID and COGIDS.
+            - Align partial cognates separately.
+
+        Args:
+            wordA (Word): the first word
+            wordB (Word): the second word
+
+        Returns:
+            cognacy (bool): whether the two words should be considered cognates.
+        """
+        tokensA, tokensB = wordA.token, wordB.token
+        dist = self.differences(tokensA, tokensB)
+        allowed = self.allowed_differences(wordA.syllables, wordB.syllables)
+        return dist <= allowed
+
     def find_attested_corresps(self):
         """ Find all correspondences attested in our data.
 
         - Inside each genus, we consider all pairs of tokens for the same concept across two
         languages.
-        - If the tokens are similar enough, we assume that they are cognates. Otherwise
-         we reject the pair.
-        - We then align cognate pairs using our custom scorer.
+        - We apply a simple cognacy test and align cognate pairs using our custom scorer.
         - We record a correspondence for each aligned position, unless a sound is to be ignored.
 
         We do not use a better cognate recognition method or cognate alignment function,
         as these tend to insert too much knowledge, which we then find back identical in
         correspondences.
-
-        TODO: (maybe)
-            - We do not yet align partial cognates separately.
-            - We do not yet use the gold cognate sets.
 
         This functions returns None, but changes `self.corresps` in place.
         """
@@ -645,9 +669,7 @@ class Correspondences(object):
         exs_counts = Counter()
         for wordA, wordB in self.data.iter_candidates():
             tokensA, tokensB = wordA.token, wordB.token
-            dist = self.differences(tokensA, tokensB)
-            allowed = self.allowed_differences(wordA.syllables, wordB.syllables)
-            if dist <= allowed:
+            if self.are_cognate(wordA, wordB):
                 self.total_cognates[(wordA.lang, wordB.lang)] += 1
                 almA, almB, sim = lingpy.nw_align(tokensA, tokensB,
                                                   self.get_scorer(tokensA, tokensB))

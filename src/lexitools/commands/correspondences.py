@@ -714,7 +714,7 @@ def run(args):
         we do not duplicate A/B and B/A. Env A and B are the environments in which sounds
         were observed (their contexts).
     `_sound_errors.csv`: records sounds that raised errors in CLTS. The corresponding
-        tokens have been ignored by the program. The headers for this table is
+        tokens have been ignored by the program. The header row is
         `Dataset,Language_ID,Sound,Token,ID`.
     `_metadata.json`: a json file recording the input parameters and all relevant metadata.
     """
@@ -729,27 +729,22 @@ def run(args):
     """
     full_asjp = False
     if args.model == "BIPA":
-        def to_sound_class(sound):
-            return str(clts.bipa[sound])
+        def to_sound_class(sound): return str(clts.bipa[sound])
     elif args.model == "Coarse":
         coarse = Coarsen(clts.bipa, "src/lexitools/commands/default_coarsening.csv")
-
-        def to_sound_class(sound):
-            return coarse[sound]
+        def to_sound_class(sound): return coarse[sound]
     elif args.model == "ASJPcode":
         if args.dataset != "lexibank/asjp":
             raise ValueError("ASJPcode only possible with lexibank/asjp")
         full_asjp = True
-
-        def to_sound_class(sound):
-            return sound  # we will grab the graphemes column
+        def to_sound_class(sound): return sound  # we will grab the graphemes column
     else:
         raise ValueError("Incorrect sound class model")
 
     ## This is a temporary fake "lexicore" interface
     dataset_list = LEXICORE if args.dataset == "lexicore" else [args.dataset.split("/")]
-
     db = MockLexicore(dataset_list)
+
     data = SoundCorrespsByGenera(db, langgenera_path,
                                  sound_class=to_sound_class,
                                  concept_list=args.concepts,
@@ -794,7 +789,7 @@ def run(args):
                 examples = "; ".join(examples)
                 writer.writerow([A.lang.family, A.lang.genus,
                                  A.lang.glottocode, B.lang.glottocode,
-                                 A.sound, B.sound, A.context, B.context, count,examples])
+                                 A.sound, B.sound, A.context, B.context, count, examples])
 
     with open(output_prefix + '_available.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )

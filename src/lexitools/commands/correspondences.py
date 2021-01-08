@@ -61,6 +61,8 @@ LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
             ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
             ('sequencecomparison', 'zhivlovobugrian')]
 
+# set of characters which should be ignored in tokens (markers, etc)
+IGNORE = {"+", "*", "#", "_", ""}
 
 class MockLexicore(object):
     """ Mock interface to lexicore datasets.
@@ -294,12 +296,13 @@ class SoundCorrespsByGenera(object):
             try:
                 token = list(self._iter_phonemes(row))
             except ValueError: continue  # unknown sounds
-            if token == [""]: continue
+            if all([s in IGNORE for s in token]): continue
 
             syllables = len(lingpy.sequence.sound_classes.syllabify(token,
                                                                     output="nested"))
 
             lang = langs[row["Language_ID"]]
+
 
             # TODO: also add COGID
             word = Word(lang=lang, syllables=syllables,
@@ -447,7 +450,6 @@ class Correspondences(object):
         counts (Counter): occurences for pairs of Sounds (the keys are frozensets).
         examples (defaultdict): example source words for pairs of sounds (the keys are frozensets).
         total_cognates (Counter): counts the number of cognates found for each pair of languages.
-        ignore (set): set of characters which should be ignored in tokens (markers, etc)
     """
 
     def __init__(self, args, data, clts):
@@ -465,7 +467,6 @@ class Correspondences(object):
         self.counts = Counter()
         self.examples = defaultdict(list)
         self.total_cognates = Counter()
-        self.ignore = set("+*#_")
 
     def find_available(self):
         """ Find which pairs of sounds from our data are available in each genera.
@@ -488,7 +489,7 @@ class Correspondences(object):
         sounds_by_genera = defaultdict(lambda: defaultdict(Counter))
         for word in self.data:
             for sound in word.token:
-                if sound not in "+*#_":  # spaces and segmentation symbols ignored
+                if sound not in IGNORE:  # spaces and segmentation symbols ignored
                     sounds_by_genera[(word.lang.family, word.lang.genus)][sound][word.lang] += 1
 
         available = list()
@@ -562,7 +563,7 @@ class Correspondences(object):
             """Turn a sequence of sounds into a sequence of categories used in contexts"""
             for s in sequence:
                 cat = self.clts.bipa[s].type
-                if s == "-" or s in self.ignore or cat in {"tone"}:
+                if s == "-" or s in IGNORE or cat in {"tone"}:
                     yield None
                 elif cat in {"vowel", "diphthong"}:
                     yield "V"
@@ -675,7 +676,7 @@ class Correspondences(object):
                 almA, almB, sim = lingpy.nw_align(tokensA, tokensB,
                                                   self.get_scorer(tokensA, tokensB))
                 for (soundA, ctxtA), (soundB, ctxtB) in self.sounds_and_contexts(almA, almB):
-                    if self.ignore.isdisjoint({soundA, soundB}):
+                    if IGNORE.isdisjoint({soundA, soundB}):
                         A = Sound(lang=wordA.lang, sound=soundA, context=ctxtA)
                         B = Sound(lang=wordB.lang, sound=soundB, context=ctxtB)
                         event = frozenset({A, B})

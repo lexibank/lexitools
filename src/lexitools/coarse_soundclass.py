@@ -139,7 +139,7 @@ class Coarsen(object):
         BIPA sound which coarsens to this exact set of coarse features.
         In order to produce intuitive labels, we take the shortest string of:
             - The BIPA sound denoted by the coarse features,
-                if it exists, and it that sound does coarsen to the sound into consideration.
+                if it exists, and if that sound does coarsen to the sound into consideration.
             - The sound in `bipa_sounds` with the shortest BIPA string, or if identical,
             with the least features.
 
@@ -226,7 +226,7 @@ class Coarsen(object):
         try:
             return self.labels[f]
         except KeyError:
-            self.labels[f] = self._create_label(f, {simple_sound})
+            self.labels[f] = str(self._create_label(f, {simple_sound}))
             return str(simple_sound)
 
     def get_coarse_features(self, sound):

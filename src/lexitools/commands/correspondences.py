@@ -298,6 +298,7 @@ class SoundCorrespsByGenera(object):
 
             syllables = len(lingpy.sequence.sound_classes.syllabify(token,
                                                                     output="nested"))
+
             lang = langs[row["Language_ID"]]
 
             # TODO: also add COGID

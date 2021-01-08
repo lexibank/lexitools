@@ -679,9 +679,10 @@ class Correspondences(object):
                         B = Sound(lang=wordB.lang, sound=soundB, context=ctxtB)
                         event = frozenset({A, B})
                         self.counts[event] += 1
-                        exs = self.examples[event]
-                        event_in_dataset = (A, wordA.dataset, B, wordB.dataset)
-                        if len(exs) < 5 and exs_counts[event_in_dataset] < 2:
+                        event_in_dataset = frozenset({A, wordA.dataset,
+                                                      B, wordB.dataset})
+                        if len(self.examples[event]) < 5 and \
+                                exs_counts[event_in_dataset] < 2:
                             exs_counts[event_in_dataset] += 1
                             self.examples[event].append((wordA, wordB))
 

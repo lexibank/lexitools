@@ -24,6 +24,7 @@ import sys
 import json
 from lexitools.coarse_soundclass import Coarsen
 from typing import List
+# import cProfile
 
 LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
             ('lexibank', 'allenbai'), ('lexibank', 'bdpa'),
@@ -59,7 +60,8 @@ LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
             ('lexibank', 'walkerarawakan'), ('lexibank', 'walworthpolynesian'),
             ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
             ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
-            ('sequencecomparison', 'zhivlovobugrian')]
+            ('sequencecomparison', 'zhivlovobugrian')
+            ]
 
 # set of characters which should be ignored in tokens (markers, etc)
 IGNORE = {"+", "*", "#", "_", ""}
@@ -510,7 +512,7 @@ class Correspondences(object):
         """
         try:
             return self.bipa_cache[item]
-        except:
+        except KeyError:
             self.bipa_cache[item] = self.clts.bipa[item]
             return self.bipa_cache[item]
 
@@ -524,7 +526,7 @@ class Correspondences(object):
         """
         try:
             return self.sca_cache[item]
-        except:
+        except KeyError:
             self.sca_cache[item] = self.clts.soundclasses_dict["sca"][item]
             return self.sca_cache[item]
 
@@ -589,9 +591,11 @@ class Correspondences(object):
         Returns:
             diff (int): the edit distance between the sound classes in each token.
         """
+        if ta == tb: return 0 # identical words
         ta = [self.sca(s) for s in ta]
         tb = [self.sca(s) for s in tb]
-        return lingpy.edit_dist(ta, tb)
+        if ta == tb: return 0 # identical sound classes
+        return lingpy.edit_dist(ta, tb) # This call is very slow.
 
     def allowed_differences(self, sa, sb):
         """ Compute the number of allowed differences for two syllable length.
@@ -822,7 +826,13 @@ def run(args):
     corresp_finder = Correspondences(args, data, clts)
     available = corresp_finder.find_available()
 
+    # with cProfile.Profile() as pr:
+    # TODO: if this needs to be much more memory efficient,
+    # we can work genus-per-genus, write to file as we work,
+    # and clear memory after each genus. For now it does not seem
+    # necessary.
     corresp_finder.find_attested_corresps()
+    # pr.dump_stats("profile.prof")
 
     now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
 

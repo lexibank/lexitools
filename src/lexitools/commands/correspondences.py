@@ -595,7 +595,7 @@ class Correspondences(object):
         ta = [self.sca(s) for s in ta]
         tb = [self.sca(s) for s in tb]
         if ta == tb: return 0 # identical sound classes
-        return lingpy.edit_dist(ta, tb) # This call is very slow.
+        return lingpy.edit_dist(ta, tb) # This is the bottleneck
 
     def allowed_differences(self, sa, sb):
         """ Compute the number of allowed differences for two syllable length.

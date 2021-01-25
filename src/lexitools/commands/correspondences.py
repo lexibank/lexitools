@@ -288,7 +288,7 @@ class SoundCorrespsByGenera(object):
             if langoid is not None and langoid.family is not None:
                 family = langoid.family.name
 
-            lang = Lang(genus=genus, family=family, glottocode=gcode, name=row["Name"])
+            lang = Lang(genus=genus, family=family, glottocode=gcode, name=langoid.name)
             self.genera_to_lang[genus].add(lang)
             langs[row["ID"]] = lang
 

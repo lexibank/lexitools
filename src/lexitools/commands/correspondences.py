@@ -577,26 +577,6 @@ class Correspondences(object):
 
         return available
 
-    def differences(self, ta, tb):
-        """ Count meaningful differences between two tokens.
-
-        We take the edit distance between the sound classes in each token.
-        This allows any changes insides SCA's classes for free, that is, expected changes
-        are not penalized.
-
-        Args:
-            ta (list of str): a token
-            tb (list of str): another token
-
-        Returns:
-            diff (int): the edit distance between the sound classes in each token.
-        """
-        if ta == tb: return 0 # identical words
-        ta = [self.sca(s) for s in ta]
-        tb = [self.sca(s) for s in tb]
-        if ta == tb: return 0 # identical sound classes
-        return lingpy.edit_dist(ta, tb) # This is the bottleneck
-
     def allowed_differences(self, sa, sb):
         """ Compute the number of allowed differences for two syllable length.
 
@@ -696,6 +676,8 @@ class Correspondences(object):
         We assume tokens are cognates if they are similar enough.
         The similarity threshold is proportional to the number of syllables.
         The distance is an edit distance over SCA strings.
+        This allows any changes insides SCA's classes for free,
+        that is, historically expected changes are not penalized.
 
         TODO:
             - Add option to swap this out for other methods.
@@ -711,10 +693,25 @@ class Correspondences(object):
         Returns:
             cognacy (bool): whether the two words should be considered cognates.
         """
-        tokensA, tokensB = wordA.token, wordB.token
-        dist = self.differences(tokensA, tokensB)
+        tokA, tokB = wordA.token, wordB.token
+        if tokA == tokB: return True
+        tokA = [self.sca(s) for s in tokA]
+        tokB = [self.sca(s) for s in tokB]
+        if tokA == tokB: return True
+
         allowed = self.allowed_differences(wordA.syllables, wordB.syllables)
-        return dist <= allowed
+
+        # Estimate a lower boundary by checking character sets
+        # If A has n more characters than B, and B m more,
+        # and m > n, then we need at least m edits
+        # (n substitutions, and m-n insertions)
+        # Of course, it is likely to be more, but this is enough to
+        # decide cases where tokens are very different
+        sa, sb = set(tokA), set(tokB)
+        lower_boundary = max(len(sa-sb), len(sb-sa))
+        if lower_boundary > allowed: return False
+
+        return lingpy.edit_dist(tokA, tokB) <= allowed # This is the bottleneck
 
     def find_attested_corresps(self):
         """ Find all correspondences attested in our data.
@@ -852,8 +849,8 @@ def run(args):
         writer.writerow(["Family", "Genus", "Lang A", "Lang B", "Sound A",
                          "Sound B", "Env A", "Env B", "Count", "Examples"])
         for sounds in corresp_finder.counts:
-            A, B = sorted(sounds,
-                          key=lambda s: s.sound)  # ensures we always have the same order.
+            # ensure to always have the same order.
+            A, B = sorted(sounds, key=lambda s: (s.sound, s.context))
             count = corresp_finder.counts[sounds]
             total = corresp_finder.total_cognates[(A.lang, B.lang)]
             if count > max(2, args.cutoff * total):

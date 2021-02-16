@@ -4,7 +4,7 @@
 import pyclts
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Set, Dict
+from typing import Set, List
 import csvw
 
 # Some CLTS sounds are composite
@@ -17,12 +17,15 @@ class CoarseningRules:
     """ Set of coarsening rule for a category.
 
     Attributes:
-        change : mapping of CLTS features to their coarse replacements.
+        change : List of frozenset tuples (conditions, replacement).
+            Conditions are frozensets of CLTS features; Replacements are frozensets too.
+            The changes are ordered as in the input file.
+            If replacement is "None", this means removing the features in the condition.
             Replacements need not be CLTS features, but it makes things nicer if they are.
-        remove : set of CLTS features to remove.
+        remove : a set of CLTS features for which to remove any values.
     """
+    change: List[tuple] = field(default_factory=list)
     remove: Set[str] = field(default_factory=set)
-    change: Dict[str, str] = field(default_factory=dict)
 
 
 class Coarsen(object):
@@ -116,19 +119,31 @@ class Coarsen(object):
         Returns:
             dict of categories to CoarseningRules
         """
+        def parse_features(feature_value_str):
+            # ex: f=v&f2=v2
+            if feature_value_str == "": ## empty set, used to remove features
+                return
+            for fv in feature_value_str.split("&"):
+                yield tuple(fv.split("="))
+
         config = {}
         with csvw.UnicodeDictReader(config_path, delimiter=",") as reader:
             for row in reader:
                 cat = row["TYPE"]
-                f, v =  row["FEATURE"], row["VALUE"]
-                f2, v2 = row["ALTERED_FEATURE"], row["ALTERED_VALUE"]
+                conditions = frozenset(parse_features(row["CONDITIONS"]))
+                change = frozenset(parse_features(row["MODIFICATION"]))
                 if cat not in config:
                     config[cat] = CoarseningRules()
+
                 rules = config[cat]
-                if v2 == "0":
-                    rules.remove.add((f,v))
-                else:
-                    rules.change[(f,v)] = (f2, v2)
+                # Complete deletion
+                if len(conditions) == 1 \
+                    and next(iter(conditions))[1] == '' \
+                    and len(change) ==0:
+                        rules.remove.add(next(iter(conditions))[0])
+
+                rules.change.append((conditions, change))
+
         return config
 
     def _create_label(self, features, bipa_sounds):
@@ -241,21 +256,27 @@ class Coarsen(object):
         """
         cat = sound.type
         try:
-            features = set(sound.featuredict.items())
+            features = {(f,v) for f,v in sound.featuredict.items() if v is not None}
         except:
             # markers do not have featuredicts
             features = {("marker", str(sound))}
         if cat in self.rules:
-            remove = self.rules[cat].remove
-            change = self.rules[cat].change
-            features = features - remove
+            # First, apply rules on still-complete feature structures
+            rules = self.rules[cat].change
+            for conditions, modification in rules:
+                if conditions <= features:
+                    for (f, v) in conditions:
+                        features.remove((f,v))
+                    for (f, v) in modification:
+                        features.add((f, v))
 
-            for (f, v) in list(features):
-                if (f, v) in change:
-                    features.remove((f, v))
-                    features.add(change[(f,v)])
+            # Then remove features we are neutralizing
+            remove = self.rules[cat].remove
+            for f, v in list(features):
+                if f in remove:
+                    features.remove((f,v))
         features.add(("category", cat))
-        return frozenset({(f,v) for (f,v) in features if v is not None})
+        return frozenset(features)
 
     def as_table(self):
         """ Describe all known sounds as a table, ready for csv export.

@@ -782,6 +782,8 @@ def run(args):
     """
     langgenera_path = "./src/lexitools/commands/lang_genera-v1.0.0.tsv"
     clts = args.clts.from_config().api
+    now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
+    output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
 
     """Three options for sound classes:
     
@@ -795,6 +797,11 @@ def run(args):
     elif args.model == "Coarse":
         coarse = Coarsen(clts.bipa, "src/lexitools/commands/default_coarsening.csv")
         def to_sound_class(sound): return coarse[sound]
+
+        with open(output_prefix + '_coarsening.csv', 'w',
+                  encoding="utf-8") as csvfile:
+            writer = csv.writer(csvfile, delimiter=',', )
+            writer.writerows(coarse.as_table())
     elif args.model == "ASJPcode":
         if args.dataset != "lexibank/asjp":
             raise ValueError("ASJPcode only possible with lexibank/asjp")
@@ -831,9 +838,6 @@ def run(args):
     corresp_finder.find_attested_corresps()
     # pr.dump_stats("profile.prof")
 
-    now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
-
-    output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
 
     def format_ex(rows):
         r1, r2 = rows
@@ -888,13 +892,6 @@ def run(args):
     metadata_dict["threshold_method"] = "normalized per syllable"
     metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
     metadata_dict["alignment_method"] = "T/non T penalized"
-
-    ## TODO: export 5 examples for each sound
-    if args.model == "Coarse":
-        with open(output_prefix + '_coarsening.csv', 'w',
-                  encoding="utf-8") as csvfile:
-            writer = csv.writer(csvfile, delimiter=',', )
-            writer.writerows(coarse.as_table())
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:

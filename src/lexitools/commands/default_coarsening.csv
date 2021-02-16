@@ -16,14 +16,14 @@
 "vowel","articulation=",,
 "vowel","breathiness=",,
 "vowel","glottalization=",,
-"vowel","height=open&centrality=front","centrality=mid","re-assign [a] as non-front"
+"vowel","height=open&centrality=front&roundedness=unrounded","height=open&centrality=central&roundedness=unrounded","re-assign [a] as non-front"
 "vowel","centrality=near-back","centrality=back","reduce centrality to three values"
 "vowel","centrality=near-front","centrality=front","reduce centrality to three values"
 "vowel","height=near-close","height=close","reduce height to three values"
 "vowel","height=close-mid","height=mid","reduce height to three values"
 "vowel","height=open-mid","height=mid","reduce height to three values"
 "vowel","height=near-open","height=open","reduce height to three values"
-"consonant","aspiration=aspirated&phonation=voiceless&place=dental&manner=affricate","aspiration=aspirated&phonation=voiceless&place=dental&manner=affricate&sibilancy=sibilant","this is a custom rule to correct the value of ts̪ʰ in CLTS v1.4.1. This rule is ordered"
+"consonant","aspiration=aspirated&phonation=voiceless&place=dental&manner=affricate&laterality=None","aspiration=aspirated&phonation=voiceless&place=dental&manner=affricate&sibilancy=sibilant","this is a custom rule to correct the value of ts̪ʰ in CLTS v1.4.1. This rule is ordered"
 "consonant","aspiration=",,
 "consonant","creakiness=",,
 "consonant","release=",,
@@ -47,7 +47,7 @@
 "consonant","manner=tap","manner=vibrant",
 "consonant","manner=trill","manner=vibrant",
 "consonant","place=labial","place=bilabial",
-"consonant","place=linguolabial","place=bilabial",
+"consonant","place=linguolabial","place=anterior",
 "consonant","place=labio-dental","place=bilabial",
 "consonant","place=lateral","place=alveolar&laterality=lateral","handle clicks with place=lateral"
 "consonant","place=alveolar","place=anterior",
@@ -56,9 +56,10 @@
 "consonant","place=post-alveolar","place=palatal",
 "consonant","palatalization=palatalized&place=anterior","place=palatal","treat palatalized anteriors as palatals"
 "consonant","palatalization=",,"this rule ordered after treatment of palatalized anteriors"
+"consonant","place=palatal&sibilancy=sibilant","place=palatal","neutralize sibilancy in palatals"
 "consonant","place=palatal-velar","place=velar",
 "consonant","voicing=devoiced","phonation=voiceless",
 "consonant","voicing=revoiced","phonation=voiced",
-"consonant","manner=approximant&phonation=voiceless","phonation=voiced","neutralize voicing in sonorants"
-"consonant","manner=vibrant&phonation=voiceless","phonation=voiced","neutralize voicing in sonorants"
-"consonant","manner=nasal&phonation=voiceless","phonation=voiced","neutralize voicing in sonorants"
+"consonant","manner=approximant&phonation=voiceless","manner=approximant&phonation=voiced","neutralize voicing in sonorants"
+"consonant","manner=vibrant&phonation=voiceless","manner=vibrant&phonation=voiced","neutralize voicing in sonorants"
+"consonant","manner=nasal&phonation=voiceless","manner=nasal&phonation=voiced","neutralize voicing in sonorants"

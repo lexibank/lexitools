@@ -20,7 +20,6 @@ class CoarseningRules:
         change : List of frozenset tuples (conditions, replacement).
             Conditions are frozensets of CLTS features; Replacements are frozensets too.
             The changes are ordered as in the input file.
-            If replacement is "None", this means removing the features in the condition.
             Replacements need not be CLTS features, but it makes things nicer if they are.
         remove : a set of CLTS features for which to remove any values.
     """
@@ -124,7 +123,10 @@ class Coarsen(object):
             if feature_value_str == "": ## empty set, used to remove features
                 return
             for fv in feature_value_str.split("&"):
-                yield tuple(fv.split("="))
+                f,v = fv.split("=")
+                if v == "None":
+                    v = None
+                yield f,v
 
         config = {}
         with csvw.UnicodeDictReader(config_path, delimiter=",") as reader:
@@ -256,7 +258,7 @@ class Coarsen(object):
         """
         cat = sound.type
         try:
-            features = {(f,v) for f,v in sound.featuredict.items() if v is not None}
+            features = set(sound.featuredict.items())
         except:
             # markers do not have featuredicts
             features = {("marker", str(sound))}
@@ -268,15 +270,18 @@ class Coarsen(object):
                     for (f, v) in conditions:
                         features.remove((f,v))
                     for (f, v) in modification:
+                        for (f2,v2) in list(features):
+                            if f2 == f:
+                                features.remove((f2,v2))
                         features.add((f, v))
-
             # Then remove features we are neutralizing
             remove = self.rules[cat].remove
             for f, v in list(features):
                 if f in remove:
                     features.remove((f,v))
         features.add(("category", cat))
-        return frozenset(features)
+        features = frozenset({(f,v) for f,v in features if v is not None})
+        return features
 
     def as_table(self):
         """ Describe all known sounds as a table, ready for csv export.
@@ -301,5 +306,5 @@ class Coarsen(object):
             coarse = self.labels[fs]
             all_bipa = reversed_cache[coarse]
             rows.append(
-                [" ".join(all_bipa), coarse, " ".join(f + "=" + v for f, v in fs)])
+                [" ".join(all_bipa), coarse, " ".join(sorted(f + "=" + v for f, v in fs))])
         return rows

@@ -4,27 +4,51 @@
 import pyclts
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Set, List
+from typing import FrozenSet
 import csvw
 
 # Some CLTS sounds are composite
 COMPOSITE = (pyclts.models.Diphthong, pyclts.models.Cluster)
 CATEGORIES = {"consonant", "vowel", "cluster", "diphthong", "tone"}
 
+@dataclass
+class Rule():
+    """ Abstract class for a coarsening rule """
+    def apply(self, featureset):
+        raise NotImplementedError()
 
 @dataclass
-class CoarseningRules:
-    """ Set of coarsening rule for a category.
+class ChangeRule(Rule):
+    """ Represents a change coarsening rule. """
+    conditions: FrozenSet[tuple] = field(default_factory=frozenset)
+    modification: FrozenSet[tuple] = field(default_factory=frozenset)
+
+    def apply(self, featureset):
+        if self.conditions <= featureset:
+            # Remove everything in the condition
+            for (f, v) in self.conditions:
+                featureset.remove((f, v))
+            for (f, v) in self.modification:
+                # Remove any existing value for f
+                for (f2, v2) in list(featureset):
+                    if f2 == f:
+                        featureset.remove((f2, v2))
+                # Make the modification
+                featureset.add((f, v))
+@dataclass
+class RemovalRule(Rule):
+    """ Represents a removal coarsening rule.
 
     Attributes:
-        change : List of frozenset tuples (conditions, replacement).
-            Conditions are frozensets of CLTS features; Replacements are frozensets too.
-            The changes are ordered as in the input file.
-            Replacements need not be CLTS features, but it makes things nicer if they are.
-        remove : a set of CLTS features for which to remove any values.
+        feature: the feature to remove.
     """
-    change: List[tuple] = field(default_factory=list)
-    remove: Set[str] = field(default_factory=set)
+    feature: str
+
+    def apply(self, featureset):
+        for (f, v) in list(featureset):
+            if f == self.feature:
+                featureset.remove((f, v))
+
 
 
 class Coarsen(object):
@@ -47,7 +71,7 @@ class Coarsen(object):
 
     Attributes:
         bipa (pyclts.TranscriptionSystem): CLTS's BIPA system
-        rules (dict of str to CoarseningRules): specification of the coarsening rules
+        rules (dict of str to list of Rules): specification of the coarsening rules
         labels (dict): mapping of coarse feature frozensets to the corresponding coarse sound string.
         cache (dict): direct mapping of BIPA sound strings to coarse sound string.
     """
@@ -116,8 +140,9 @@ class Coarsen(object):
             config_path: path to the config file.
 
         Returns:
-            dict of categories to CoarseningRules
+            dict of categories to list of Rules
         """
+        ANY = "#ANY#"
         def parse_features(feature_value_str):
             # ex: f=v&f2=v2
             if feature_value_str == "": ## empty set, used to remove features
@@ -126,25 +151,28 @@ class Coarsen(object):
                 f,v = fv.split("=")
                 if v == "None":
                     v = None
+                if v == "":
+                    v = ANY
                 yield f,v
 
         config = {}
         with csvw.UnicodeDictReader(config_path, delimiter=",") as reader:
             for row in reader:
                 cat = row["TYPE"]
-                conditions = frozenset(parse_features(row["CONDITIONS"]))
-                change = frozenset(parse_features(row["MODIFICATION"]))
                 if cat not in config:
-                    config[cat] = CoarseningRules()
+                    config[cat] = []
 
-                rules = config[cat]
-                # Complete deletion
+                conditions = list(parse_features(row["CONDITIONS"]))
+                # Removal rule
                 if len(conditions) == 1 \
-                    and next(iter(conditions))[1] == '' \
-                    and len(change) ==0:
-                        rules.remove.add(next(iter(conditions))[0])
-
-                rules.change.append((conditions, change))
+                    and conditions[0][1] == ANY \
+                    and row["MODIFICATION"] == "":
+                    rule = RemovalRule(feature=conditions[0][0])
+                else:
+                    modification = frozenset(parse_features(row["MODIFICATION"]))
+                    rule = ChangeRule(conditions=frozenset(conditions),
+                                  modification=modification)
+                config[cat].append(rule)
 
         return config
 
@@ -259,26 +287,11 @@ class Coarsen(object):
         cat = sound.type
         try:
             features = set(sound.featuredict.items())
-        except:
-            # markers do not have featuredicts
+        except AttributeError:
+            # markers do not have featuredicts in CLTS
             features = {("marker", str(sound))}
-        if cat in self.rules:
-            # First, apply rules on still-complete feature structures
-            rules = self.rules[cat].change
-            for conditions, modification in rules:
-                if conditions <= features:
-                    for (f, v) in conditions:
-                        features.remove((f,v))
-                    for (f, v) in modification:
-                        for (f2,v2) in list(features):
-                            if f2 == f:
-                                features.remove((f2,v2))
-                        features.add((f, v))
-            # Then remove features we are neutralizing
-            remove = self.rules[cat].remove
-            for f, v in list(features):
-                if f in remove:
-                    features.remove((f,v))
+        for rule in self.rules.get(cat,[]):
+            rule.apply(features)
         features.add(("category", cat))
         features = frozenset({(f,v) for f,v in features if v is not None})
         return features

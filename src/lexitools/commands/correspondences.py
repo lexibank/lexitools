@@ -108,7 +108,7 @@ class MockLexicore(object):
                 msg.extend(["I installed:", ", ".join(successful_install), "."])
             if failed_install:
                 msg.extend(["I failed to install: ", " ".join(failed_install),"."])
-            msg.extend("Please install any missing datasets and re-run the command.")
+            msg.extend(["Please install any missing datasets and re-run the command."])
             raise EnvironmentError(" ".join(msg))
 
         self.datasets = {}

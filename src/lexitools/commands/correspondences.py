@@ -797,11 +797,6 @@ def run(args):
     elif args.model == "Coarse":
         coarse = Coarsen(clts.bipa, "src/lexitools/commands/default_coarsening.csv")
         def to_sound_class(sound): return coarse[sound]
-
-        with open(output_prefix + '_coarsening.csv', 'w',
-                  encoding="utf-8") as csvfile:
-            writer = csv.writer(csvfile, delimiter=',', )
-            writer.writerows(coarse.as_table())
     elif args.model == "ASJPcode":
         if args.dataset != "lexibank/asjp":
             raise ValueError("ASJPcode only possible with lexibank/asjp")
@@ -847,6 +842,11 @@ def run(args):
 
         return template.format(word=tok1, **asdict(r1)) + "/" + \
                template.format(word=tok2, **asdict(r2))
+
+
+    with open(output_prefix + '_coarsening.csv', 'w', encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerows(coarse.as_table())
 
     with open(output_prefix + '_counts.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )

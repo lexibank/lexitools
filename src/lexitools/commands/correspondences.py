@@ -641,11 +641,17 @@ class Correspondences(object):
         The alignment scorer is a dict of a pair of sounds (a,b) to a score, for all pairs
         of sounds across the two sequences.
 
-        Here, we set 1 for a match, -10 for mismatches involving a tone and something
-        that is not a t one, and -1 for any other mismatches and indels.
+        Here, we set :
+
+        - 1 for a match,
+        - -10 for mismatches involving a tone and something that is not a tone,
+        - -1.5 for other cross-category mismatches
+        - -1 for in-category mismatches and indels
 
         The reason to penalize tones is that having tones in the sequence of sounds is
         only a notational trick, as they actually belong to a different tier.
+        The reason to prefer in-category matches is to favor alignments of type CV/-V
+        rather than CV/V-.
 
         For reference, the default lingpy scorer is:
         >>> {(a, b): 1.0 if a == b else -1.0 for a, b in product(seqA, seqB)}
@@ -665,6 +671,8 @@ class Correspondences(object):
             b_cat = self.tones.isdisjoint(b)
             if a_cat != b_cat:
                 return -10
+            elif self.bipa(a).type == self.bipa(b).type:
+                return -1.5
             else:
                 return -1
 

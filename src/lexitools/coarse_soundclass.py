@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Coarsen sound classes"""
 import pyclts
-from collections import defaultdict
+from collections import defaultdict, Counter
 from dataclasses import dataclass, field
 from typing import FrozenSet
 import csvw
@@ -176,16 +176,16 @@ class Coarsen(object):
 
         return config
 
-    def _create_label(self, features, bipa_sounds):
+    def _create_label(self, features, sound_set):
         """ Create a label for a coarse sound.
 
         A coarse sound is defined by a set of coarse features. Its label must be a
         BIPA sound which coarsens to this exact set of coarse features.
-        In order to produce intuitive labels, we take the shortest string of:
-            - The BIPA sound denoted by the coarse features,
-                if it exists, and if that sound does coarsen to the sound into consideration.
-            - The sound in `bipa_sounds` with the shortest BIPA string, or if identical,
-            with the least features.
+        In order to produce intuitive labels, we pick in bipa_sounds, preferring:
+
+        - the shortest string
+        - a sound which is as similar as possible to the coarse features
+        - preferrably a string that is often repeated in the set of coarse sounds
 
         For example:
             >>> self.create_label(frozenset({("manner","approximant"),
@@ -195,23 +195,31 @@ class Coarsen(object):
 
         Args:
             features (frozenset): coarse feature-values which defines a coarse sound.
-            bipa_sounds (iterable of str): iterable of bipa strings which result in this coarse sound.
+            sound_set (iterable of str): iterable of bipa strings which result in this coarse sound.
 
         Returns: a bipa sound which should serve as an alias for this feature set.
         """
-        feature_str = " ".join(v for f, v in features if f != "category")
-        feature_str += " " + dict(features)["category"]
-        candidates = []
-        try:
-            bipa_label = self.bipa[feature_str]
-            f = self.get_coarse_features(bipa_label)
-            if bipa_label in bipa_sounds or f == features:
-                candidates.append(bipa_label)
-        except:
-            pass
-        short_label = min(bipa_sounds, key=lambda s: (len(str(s)), len(s.featureset)))
-        candidates.append(short_label)
-        return min(candidates, key=lambda s: (len(str(s)), len(s.featureset)))
+        # hard codes the preference for a prototypical narrow place
+        place_sort = {a:i for i,a in enumerate(["bilabial", "alveolar", "post-alveolar", "palatal"])}
+
+        def jaccard(f1,f2):
+            return len(f1 & f2) / len(f1 | f2)
+        freqs = Counter([char for s in sound_set for char in str(s)])
+        def cmp(sound):
+            string_length = len(str(sound))
+            try:
+                place = sound.featuredict.get("place", None)
+                this_featureset =  {item for item in sound.featuredict.items() if item[1] is not None}
+                dist_to_coarse = -jaccard(features,this_featureset)
+            except AttributeError: # Markers don't have featuredicts
+                dist_to_coarse = 1
+                place = None
+            negfreq = -sum(freqs[c] for c in str(sound))
+
+            place_order = place_sort.get(place, len(place_sort)+1)
+            return (string_length, place_order, dist_to_coarse, negfreq)
+
+        return min(sound_set, key=cmp)
 
     def __getitem__(self, item):
         """ Get a coarse sound string from a BIPA sound string.

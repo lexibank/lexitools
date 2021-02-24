@@ -108,7 +108,7 @@ class MockLexicore(object):
                 msg.extend(["I installed:", ", ".join(successful_install), "."])
             if failed_install:
                 msg.extend(["I failed to install: ", " ".join(failed_install),"."])
-            msg.extend("Please install any missing datasets and re-run the command.")
+            msg.extend(["Please install any missing datasets and re-run the command."])
             raise EnvironmentError(" ".join(msg))
 
         self.datasets = {}
@@ -641,11 +641,17 @@ class Correspondences(object):
         The alignment scorer is a dict of a pair of sounds (a,b) to a score, for all pairs
         of sounds across the two sequences.
 
-        Here, we set 1 for a match, -10 for mismatches involving a tone and something
-        that is not a t one, and -1 for any other mismatches and indels.
+        Here, we set :
+
+        - 1 for a match,
+        - -10 for mismatches involving a tone and something that is not a tone,
+        - -1.5 for other cross-category mismatches
+        - -1 for in-category mismatches and indels
 
         The reason to penalize tones is that having tones in the sequence of sounds is
         only a notational trick, as they actually belong to a different tier.
+        The reason to prefer in-category matches is to favor alignments of type CV/-V
+        rather than CV/V-.
 
         For reference, the default lingpy scorer is:
         >>> {(a, b): 1.0 if a == b else -1.0 for a, b in product(seqA, seqB)}
@@ -665,6 +671,8 @@ class Correspondences(object):
             b_cat = self.tones.isdisjoint(b)
             if a_cat != b_cat:
                 return -10
+            elif self.bipa(a).type == self.bipa(b).type:
+                return -1.5
             else:
                 return -1
 
@@ -782,6 +790,8 @@ def run(args):
     """
     langgenera_path = "./src/lexitools/commands/lang_genera-v1.0.0.tsv"
     clts = args.clts.from_config().api
+    now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
+    output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
 
     """Three options for sound classes:
     
@@ -831,9 +841,6 @@ def run(args):
     corresp_finder.find_attested_corresps()
     # pr.dump_stats("profile.prof")
 
-    now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
-
-    output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
 
     def format_ex(rows):
         r1, r2 = rows
@@ -843,6 +850,11 @@ def run(args):
 
         return template.format(word=tok1, **asdict(r1)) + "/" + \
                template.format(word=tok2, **asdict(r2))
+
+
+    with open(output_prefix + '_coarsening.csv', 'w', encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerows(coarse.as_table())
 
     with open(output_prefix + '_counts.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
@@ -888,13 +900,6 @@ def run(args):
     metadata_dict["threshold_method"] = "normalized per syllable"
     metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
     metadata_dict["alignment_method"] = "T/non T penalized"
-
-    ## TODO: export 5 examples for each sound
-    if args.model == "Coarse":
-        with open(output_prefix + '_coarsening.csv', 'w',
-                  encoding="utf-8") as csvfile:
-            writer = csv.writer(csvfile, delimiter=',', )
-            writer.writerows(coarse.as_table())
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:

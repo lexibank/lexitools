@@ -671,10 +671,10 @@ class Correspondences(object):
             b_cat = self.tones.isdisjoint(b)
             if a_cat != b_cat:
                 return -10
-            elif self.bipa(a).type == self.bipa(b).type:
-                return -1.5
-            else:
+            elif self.bipa(a).type != self.bipa(b).type:
                 return -1
+            else:
+                return -1.5
 
         return {(a, b): score(a, b) for a, b in product(seqA, seqB)}
 

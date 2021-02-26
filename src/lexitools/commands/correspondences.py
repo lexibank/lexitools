@@ -26,6 +26,9 @@ import json
 from lexitools.coarse_soundclass import Coarsen
 from typing import List
 
+# Do not merge consecutive vowels into diphthongs
+lingpy.settings.rcParams["merge_vowels"] = False
+
 # import cProfile
 
 LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
@@ -219,7 +222,7 @@ class Word:
         id (str): the identifier for the row in the dataset's wordlist
     """
     __slots__ = ('lang', 'token', 'concept', 'syllables', 'original_token',
-                 'dataset', 'id')
+                 'dataset', 'id', 'cognate_id')
     lang: Lang
     token: List[str]
     concept: str
@@ -227,6 +230,7 @@ class Word:
     original_token: str
     dataset: str
     id: str
+    cognate_id: str
 
 
 class SoundCorrespsByGenera(object):
@@ -282,6 +286,7 @@ class SoundCorrespsByGenera(object):
         # this is less slow than calling .langoid(code) for each code
         langoids = glottolog.languoids_by_code()
         self.genera_to_lang = defaultdict(set)
+        self.errors = [["Dataset", "Language_ID", "Sound", "Token", "ID"]]
         self.asjp = asjp
         self.concepts_intersection = Counter()
 
@@ -328,6 +333,7 @@ class SoundCorrespsByGenera(object):
 
             # TODO: if it has COGIDS, split on morphemes
             # TODO: add a Word for each morpheme + morpheme cogid
+
             try:
                 token = list(self._iter_phonemes(row))
             except ValueError:
@@ -342,6 +348,7 @@ class SoundCorrespsByGenera(object):
             # TODO: also add COGID
             word = Word(lang=lang, syllables=syllables,
                         token=token, concept=concept, id=row["ID"],
+                        cognate_id=row.get("Cognateset_ID", None),
                         original_token=" ".join(row["Segments"]), dataset=row["dataset"])
 
             self.data[(lang, concept)][" ".join(token)].append(word)
@@ -374,9 +381,14 @@ class SoundCorrespsByGenera(object):
 
         tokens = " ".join([s for s in segments if (s is not None and s != "")]).split(" ")
         for segment in tokens:
-            if "/" in segment:
-                segment = segment.split("/")[1]
-            yield self.sound_class(segment)
+            try:
+                if "/" in segment:
+                    segment = segment.split("/")[1]
+                yield self.sound_class(segment)
+            except ValueError as e:
+                self.errors.append((row["dataset"], row["Language_ID"], segment,
+                                    " ".join(str(x) for x in segments), row["ID"]))
+                raise e
 
     def iter_candidates(self):
         """ Iterate over word pair candidates.
@@ -462,6 +474,13 @@ def register(parser):
         help='select a sound class model: BIPA, ASJPcode, or Coarse.')
 
     parser.add_argument(
+        '--alignment',
+        choices=["sca", "simple"],
+        default='simple',
+        type=str,
+        help='select an alignment method: either of SCA or a simple scorer '
+             'which penalizes C/V matches and forbids T/C & T/V matches.')
+    parser.add_argument(
         '--bdpa',
         action='store',
         default=None,
@@ -491,7 +510,7 @@ class Correspondences(object):
             (using calls to bipa is too slow)
     """
 
-    def __init__(self, args, data, clts):
+    def __init__(self, args, data, clts, align_method):
         """ Initialization only records the arguments and defines the attributes.
 
         Args:
@@ -508,6 +527,10 @@ class Correspondences(object):
         self.examples = defaultdict(list)
         self.total_cognates = Counter()
         self.tones = set("⁰¹²³⁴⁵˥˦˧˨↓↑↗↘")
+        if align_method == "sca":
+            self.align = self.align_sca
+        elif align_method == "simple":
+            self.align = self.align_simple
 
     def bipa(self, item):
         """ Caches calls to the bipa transcription system, as resolve_sound is too slow.
@@ -690,7 +713,8 @@ class Correspondences(object):
     def are_cognate(self, wordA, wordB):
         """ Test if two words are cognates.
 
-        We assume tokens are cognates if they are similar enough.
+        If we have gold cognate identifier information, we simply use it.
+        Otherwise, we assume tokens are cognates if they are similar enough.
         The similarity threshold is proportional to the number of syllables.
         The distance is an edit distance over SCA strings.
         This allows any changes insides SCA's classes for free,
@@ -700,7 +724,6 @@ class Correspondences(object):
             - Add option to swap this out for other methods.
              Using a method which considers whole lists will require refactoring of
              SoundCorrespsByGenera.
-            - Use the gold cognate sets in COGID and COGIDS.
             - Align partial cognates separately.
 
         Args:
@@ -710,15 +733,23 @@ class Correspondences(object):
         Returns:
             cognacy (bool): whether the two words should be considered cognates.
         """
+        # In a single dataset with gold cognate IDs, rely on it
+        if wordA.dataset == wordB.dataset and wordA.cognate_id is not None:
+            return wordA.cognate_id == wordB.cognate_id
+
+        # Identical words are cognate
         tokA, tokB = wordA.token, wordB.token
         if tokA == tokB: return True
+
+        # Identical sequences of sound classes are cognates
         tokA = [self.sca(s) for s in tokA]
         tokB = [self.sca(s) for s in tokB]
         if tokA == tokB: return True
 
+        # Use a threshold on sequence similarity
         allowed = self.allowed_differences(wordA.syllables, wordB.syllables)
 
-        # Estimate a lower boundary by checking character sets
+        # Estimate a lower boundary by checking character sets.
         # If A has n more characters than B, and B m more,
         # and m > n, then we need at least m edits
         # (n substitutions, and m-n insertions)
@@ -730,9 +761,17 @@ class Correspondences(object):
 
         return lingpy.edit_dist(tokA, tokB) <= allowed  # This is the bottleneck
 
-    def align(self, a, b):
-        """ Perform the alignment """
+    def align_simple(self, a, b):
+        """ Perform the alignment using a simple method and custom scorer."""
         return lingpy.nw_align(a, b, self.get_scorer(a, b))
+
+    def align_sca(self, a, b):
+        """ Perform the alignment using SCA from lingpy."""
+        if a == b:
+            return a, b, 0
+        p = lingpy.Pairwise(a, b)
+        p.align(model="sca")
+        return p.alignments[0]
 
     def find_attested_corresps(self):
         """ Find all correspondences attested in our data.
@@ -772,10 +811,9 @@ class Correspondences(object):
     def evaluate_alignment(self, path, sound_model, filename):
         gold = lingpy.PSA(path) # used for evaluation
         pred = lingpy.PSA(path) # alignments will be replaced by our method
+        sound_model.silent_errors = True
 
         for i, (seqA, seqB) in enumerate(pred.tokens):
-            print(seqA, seqA)
-
             # Replace sequences with coarsened sequences
             seqA = [sound_model[s] for s in seqA]
             seqB = [sound_model[s] for s in seqB]
@@ -798,7 +836,7 @@ class Correspondences(object):
                   "Percentage of identical rows (BDPA)": eval.r_score(),
                   }
         eval.diff(filename=filename)
-        print(scores)
+        sound_model.silent_errors = False
         return scores
 
 
@@ -881,14 +919,15 @@ def run(args):
             len(data.genera_to_lang),
             len(data.concepts_subset)))
 
-    corresp_finder = Correspondences(args, data, clts)
+    corresp_finder = Correspondences(args, data, clts,
+                                     align_method=args.alignment)
 
+    align_eval = {}
     if args.model == "Coarse" and args.bdpa is not None:
         align_eval = corresp_finder.evaluate_alignment(args.bdpa,
                                       coarse,
                                       output_prefix + '_alignment_eval.diff')
 
-    align_eval = {}
     available = corresp_finder.find_available()
 
     # with cProfile.Profile() as pr:
@@ -957,8 +996,13 @@ def run(args):
     metadata_dict["n_tokens"] = len(data.data)
     metadata_dict["threshold_method"] = "normalized per syllable"
     metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
-    metadata_dict["alignment_method"] = "T/non T penalized"
+    metadata_dict["alignment_method"] = args.alignment
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:
         json.dump(metadata_dict, metafile, indent=4, sort_keys=True)
+
+    with open(output_prefix + '_sound_errors.csv', 'w',
+              encoding="utf-8") as errorfile:
+        for line in data.errors:
+            errorfile.write(",".join(line) + "\n")

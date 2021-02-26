@@ -112,6 +112,7 @@ class Coarsen(object):
         self.rules = self._parse_config(config_path)
         self.labels = {}  # coarse feature set -> coarse string
         self.cache = {}  # bipa string -> coarse string
+        self.silent_errors = False # By default, throw on unknown clts sound
 
         # Construct a dict of coarse feature set -> all listed bipa sounds resulting in this set
         sounds = defaultdict(list)
@@ -247,10 +248,12 @@ class Coarsen(object):
             sound = self.bipa[item]
             if isinstance(sound, pyclts.models.UnknownSound):
                 # Unknown CLTS sounds get their own coarse class
-                coarse_sound =  item
-                fs = frozenset({("unknownSound", str(item))})
-                self.labels[fs] = item
-                #raise ValueError("Unknown sound " + item)
+                if self.silent_errors:
+                    coarse_sound =  item
+                    fs = frozenset({("unknownSound", str(item))})
+                    self.labels[fs] = item
+                else:
+                    raise ValueError("Unknown sound " + item)
             elif isinstance(sound, COMPOSITE):
                 sa = self.coarsen_sound(sound.from_sound)
                 sb = self.coarsen_sound(sound.to_sound)

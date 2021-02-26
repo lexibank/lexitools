@@ -246,8 +246,12 @@ class Coarsen(object):
         except KeyError:
             sound = self.bipa[item]
             if isinstance(sound, pyclts.models.UnknownSound):
-                raise ValueError("Unknown sound " + item)
-            if isinstance(sound, COMPOSITE):
+                # Unknown CLTS sounds get their own coarse class
+                coarse_sound =  item
+                fs = frozenset({("unknownSound", str(item))})
+                self.labels[fs] = item
+                #raise ValueError("Unknown sound " + item)
+            elif isinstance(sound, COMPOSITE):
                 sa = self.coarsen_sound(sound.from_sound)
                 sb = self.coarsen_sound(sound.to_sound)
                 new_sound = self.bipa[sa + sb]

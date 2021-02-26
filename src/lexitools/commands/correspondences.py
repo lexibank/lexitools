@@ -10,6 +10,7 @@ from pyconcepticon.api import Concepticon
 from cldfcatalog import Config
 
 import lingpy
+import lingpy.evaluate
 from itertools import combinations, product
 from collections import Counter, defaultdict
 from pylexibank import progressbar
@@ -24,6 +25,7 @@ import sys
 import json
 from lexitools.coarse_soundclass import Coarsen
 from typing import List
+
 # import cProfile
 
 LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
@@ -98,16 +100,16 @@ class MockLexicore(object):
                         "-e", egg_pattern.format(org=org, name=name)]
                 res = subprocess.run(args)
                 if res.returncode == 0:
-                    successful_install.append(org+"/"+name)
+                    successful_install.append(org + "/" + name)
                 else:
-                    failed_install.append(org+"/"+name)
+                    failed_install.append(org + "/" + name)
 
         if successful_install or failed_install:
             msg = ["Some datasets were not installed."]
             if successful_install:
                 msg.extend(["I installed:", ", ".join(successful_install), "."])
             if failed_install:
-                msg.extend(["I failed to install: ", " ".join(failed_install),"."])
+                msg.extend(["I failed to install: ", " ".join(failed_install), "."])
             msg.extend(["Please install any missing datasets and re-run the command."])
             raise EnvironmentError(" ".join(msg))
 
@@ -147,22 +149,26 @@ class MockLexicore(object):
         """
         return list(self.iter_table(table_name))
 
+
 class FlyWeight(type):
     """ This is a Flyweight metaclass.
 
         This is used to cache objects, so that a single instance exists for a given set of
         keyword arguments (in a dataclass). The Flyweight pattern is very memory efficient.
     """
+
     def __init__(self, *args):
         super().__init__(args)
         self.cache = {}
 
     def __call__(self, **kwargs):
         id_ = tuple(sorted(kwargs.items()))
-        try: return self.cache[id_]
+        try:
+            return self.cache[id_]
         except KeyError:
             self.cache[id_] = super().__call__(**kwargs)
             return self.cache[id_]
+
 
 @dataclass(eq=True, frozen=True)
 class Lang(metaclass=FlyWeight):
@@ -176,6 +182,7 @@ class Lang(metaclass=FlyWeight):
     glottocode: str
     family: str
     name: str
+
 
 @dataclass(eq=True, frozen=True)
 class Sound(metaclass=FlyWeight):
@@ -193,6 +200,7 @@ class Sound(metaclass=FlyWeight):
     sound: str
     lang: Lang
     context: str
+
 
 @dataclass
 class Word:
@@ -274,7 +282,6 @@ class SoundCorrespsByGenera(object):
         # this is less slow than calling .langoid(code) for each code
         langoids = glottolog.languoids_by_code()
         self.genera_to_lang = defaultdict(set)
-        self.errors = [["Dataset", "Language_ID", "Sound", "Token", "ID"]]
         self.asjp = asjp
         self.concepts_intersection = Counter()
 
@@ -305,12 +312,12 @@ class SoundCorrespsByGenera(object):
             self.concepts_subset = set(concepts.values())
 
         self.lang_to_concept = defaultdict(set)
-        self.data = defaultdict(lambda:defaultdict(list))
+        self.data = defaultdict(lambda: defaultdict(list))
 
         for row in progressbar(db.iter_table('FormTable'),
                                desc="Loading data..."):
 
-            if row.get("Loan", ""): continue # Ignore loan words
+            if row.get("Loan", ""): continue  # Ignore loan words
 
             concept = concepts[row["Parameter_ID"]]
             if concept not in self.concepts_subset or \
@@ -319,12 +326,12 @@ class SoundCorrespsByGenera(object):
                     (self.asjp and row["Graphemes"] is None):
                 continue
 
-
             # TODO: if it has COGIDS, split on morphemes
             # TODO: add a Word for each morpheme + morpheme cogid
             try:
                 token = list(self._iter_phonemes(row))
-            except ValueError: continue  # unknown sounds
+            except ValueError:
+                continue  # unknown sounds
             if all([s in IGNORE for s in token]): continue
 
             syllables = len(lingpy.sequence.sound_classes.syllabify(token,
@@ -334,8 +341,8 @@ class SoundCorrespsByGenera(object):
 
             # TODO: also add COGID
             word = Word(lang=lang, syllables=syllables,
-                       token=token, concept=concept, id=row["ID"],
-                       original_token=" ".join(row["Segments"]), dataset=row["dataset"])
+                        token=token, concept=concept, id=row["ID"],
+                        original_token=" ".join(row["Segments"]), dataset=row["dataset"])
 
             self.data[(lang, concept)][" ".join(token)].append(word)
             self.lang_to_concept[lang].add(concept)
@@ -367,14 +374,9 @@ class SoundCorrespsByGenera(object):
 
         tokens = " ".join([s for s in segments if (s is not None and s != "")]).split(" ")
         for segment in tokens:
-            try:
-                if "/" in segment:
-                    segment = segment.split("/")[1]
-                yield self.sound_class(segment)
-            except ValueError as e:
-                self.errors.append((row["dataset"], row["Language_ID"], segment,
-                                    " ".join(str(x) for x in segments), row["ID"]))
-                raise e
+            if "/" in segment:
+                segment = segment.split("/")[1]
+            yield self.sound_class(segment)
 
     def iter_candidates(self):
         """ Iterate over word pair candidates.
@@ -402,7 +404,7 @@ class SoundCorrespsByGenera(object):
                 self.concepts_intersection[(langA, langB)] += len(common_concepts)
                 for concept in common_concepts:
                     for tokA, tokB in product(self.data[(langA, concept)],
-                                                self.data[(langB, concept)]):
+                                              self.data[(langB, concept)]):
                         # Here we grab the first word, but there may be other words,
                         # if this token is documented in other datasets.
                         # So far we don't really need the information.
@@ -418,7 +420,7 @@ class SoundCorrespsByGenera(object):
         """
         for lang, concept in self.data:
             for token in self.data[(lang, concept)]:
-                yield self.data[(lang, concept)][token][0] # also picking a single word
+                yield self.data[(lang, concept)][token][0]  # also picking a single word
 
 
 def register(parser):
@@ -459,6 +461,12 @@ def register(parser):
         type=str,
         help='select a sound class model: BIPA, ASJPcode, or Coarse.')
 
+    parser.add_argument(
+        '--bdpa',
+        action='store',
+        default=None,
+        type=str,
+        help='path to BDPA gold alignments, for evaluation (psa file)')
     parser.add_argument(
         '--concepts',
         action='store',
@@ -551,7 +559,8 @@ class Correspondences(object):
         for word in self.data:
             for sound in word.token:
                 if sound not in IGNORE:  # spaces and segmentation symbols ignored
-                    sounds_by_genera[(word.lang.family, word.lang.genus)][sound][word.lang] += 1
+                    sounds_by_genera[(word.lang.family, word.lang.genus)][sound][
+                        word.lang] += 1
 
         available = list()
         for family, genus in list(sounds_by_genera):
@@ -716,10 +725,14 @@ class Correspondences(object):
         # Of course, it is likely to be more, but this is enough to
         # decide cases where tokens are very different
         sa, sb = set(tokA), set(tokB)
-        lower_boundary = max(len(sa-sb), len(sb-sa))
+        lower_boundary = max(len(sa - sb), len(sb - sa))
         if lower_boundary > allowed: return False
 
-        return lingpy.edit_dist(tokA, tokB) <= allowed # This is the bottleneck
+        return lingpy.edit_dist(tokA, tokB) <= allowed  # This is the bottleneck
+
+    def align(self, a, b):
+        """ Perform the alignment """
+        return lingpy.nw_align(a, b, self.get_scorer(a, b))
 
     def find_attested_corresps(self):
         """ Find all correspondences attested in our data.
@@ -741,9 +754,9 @@ class Correspondences(object):
             tokensA, tokensB = wordA.token, wordB.token
             if self.are_cognate(wordA, wordB):
                 self.total_cognates[(wordA.lang, wordB.lang)] += 1
-                almA, almB, sim = lingpy.nw_align(tokensA, tokensB,
-                                                  self.get_scorer(tokensA, tokensB))
-                for (soundA, ctxtA), (soundB, ctxtB) in self.sounds_and_contexts(almA, almB):
+                almA, almB, sim = self.align(tokensA, tokensB)
+                for (soundA, ctxtA), (soundB, ctxtB) in self.sounds_and_contexts(almA,
+                                                                                 almB):
                     if IGNORE.isdisjoint({soundA, soundB}):
                         A = Sound(lang=wordA.lang, sound=soundA, context=ctxtA)
                         B = Sound(lang=wordB.lang, sound=soundB, context=ctxtB)
@@ -755,6 +768,39 @@ class Correspondences(object):
                                 exs_counts[event_in_dataset] < 2:
                             exs_counts[event_in_dataset] += 1
                             self.examples[event].append((wordA, wordB))
+
+    def evaluate_alignment(self, path, sound_model, filename):
+        gold = lingpy.PSA(path) # used for evaluation
+        pred = lingpy.PSA(path) # alignments will be replaced by our method
+
+        for i, (seqA, seqB) in enumerate(pred.tokens):
+            print(seqA, seqA)
+
+            # Replace sequences with coarsened sequences
+            seqA = [sound_model[s] for s in seqA]
+            seqB = [sound_model[s] for s in seqB]
+            gold.tokens[i] = (seqA, seqB)
+            pred.tokens[i] = (seqA, seqB)
+
+            # Replace gold data with coarsened sequences
+            goldA, goldB, goldSim = gold.alignments[i]
+            goldA = [s if s =="-" else sound_model[s] for s in goldA]
+            goldB = [s if s =="-" else sound_model[s] for s in goldB]
+            gold.alignments[i] = goldA, goldB, goldSim
+
+            # Perform alignment on coarse sequences
+            pred.alignments[i] = self.align(seqA, seqB)
+
+        eval = lingpy.evaluate.apa.EvalPSA(gold, pred)
+        scores = {"Column score (BDPA)":eval.c_score(),
+                  "Sum of pair score (BDPA)": eval.sp_score(),
+                  "Jaccard score (BDPA)": eval.jc_score(),
+                  "Percentage of identical rows (BDPA)": eval.r_score(),
+                  }
+        eval.diff(filename=filename)
+        print(scores)
+        return scores
+
 
 def run(args):
     """Run the correspondence command.
@@ -801,15 +847,20 @@ def run(args):
     """
     full_asjp = False
     if args.model == "BIPA":
-        def to_sound_class(sound): return str(clts.bipa[sound])
+        def to_sound_class(sound):
+            return str(clts.bipa[sound])
     elif args.model == "Coarse":
         coarse = Coarsen(clts.bipa, "src/lexitools/commands/default_coarsening.csv")
-        def to_sound_class(sound): return coarse[sound]
+
+        def to_sound_class(sound):
+            return coarse[sound]
     elif args.model == "ASJPcode":
         if args.dataset != "lexibank/asjp":
             raise ValueError("ASJPcode only possible with lexibank/asjp")
         full_asjp = True
-        def to_sound_class(sound): return sound  # we will grab the graphemes column
+
+        def to_sound_class(sound):
+            return sound  # we will grab the graphemes column
     else:
         raise ValueError("Incorrect sound class model")
 
@@ -831,6 +882,13 @@ def run(args):
             len(data.concepts_subset)))
 
     corresp_finder = Correspondences(args, data, clts)
+
+    if args.model == "Coarse" and args.bdpa is not None:
+        align_eval = corresp_finder.evaluate_alignment(args.bdpa,
+                                      coarse,
+                                      output_prefix + '_alignment_eval.diff')
+
+    align_eval = {}
     available = corresp_finder.find_available()
 
     # with cProfile.Profile() as pr:
@@ -839,8 +897,8 @@ def run(args):
     # and clear memory after each genus. For now it does not seem
     # necessary.
     corresp_finder.find_attested_corresps()
-    # pr.dump_stats("profile.prof")
 
+    # pr.dump_stats("profile.prof")
 
     def format_ex(rows):
         r1, r2 = rows
@@ -850,7 +908,6 @@ def run(args):
 
         return template.format(word=tok1, **asdict(r1)) + "/" + \
                template.format(word=tok2, **asdict(r2))
-
 
     with open(output_prefix + '_coarsening.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
@@ -891,6 +948,7 @@ def run(args):
                      "model": args.model,
                      "concepts": args.concepts,
                      "dataset": args.dataset}
+    metadata_dict.update(align_eval)
     dataset_str = sorted(a + "/" + b for a, b in dataset_list)
     metadata_dict["dataset_list"] = dataset_str
     metadata_dict["n_languages"] = len(data.lang_to_concept)
@@ -904,8 +962,3 @@ def run(args):
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:
         json.dump(metadata_dict, metafile, indent=4, sort_keys=True)
-
-    with open(output_prefix + '_sound_errors.csv', 'w',
-              encoding="utf-8") as errorfile:
-        for line in data.errors:
-            errorfile.write(",".join(line) + "\n")

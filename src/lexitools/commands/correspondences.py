@@ -527,6 +527,7 @@ class Correspondences(object):
         self.examples = defaultdict(list)
         self.total_cognates = Counter()
         self.tones = set("⁰¹²³⁴⁵˥˦˧˨↓↑↗↘")
+        self.cognates_pairs_by_datasets = Counter()
         if align_method == "sca":
             self.align = self.align_sca
         elif align_method == "simple":
@@ -790,10 +791,14 @@ class Correspondences(object):
         self.args.log.info('Counting attested corresp...')
         exs_counts = Counter()
         for wordA, wordB in self.data.iter_candidates():
-            tokensA, tokensB = wordA.token, wordB.token
             if self.are_cognate(wordA, wordB):
                 self.total_cognates[(wordA.lang, wordB.lang)] += 1
-                almA, almB, sim = self.align(tokensA, tokensB)
+
+                # Record that we found a cognate pair for these datasets
+                datasets = tuple(sorted((wordA.dataset,wordB.dataset)))
+                self.cognates_pairs_by_datasets[datasets] += 1
+
+                almA, almB, sim = self.align(wordA.token, wordB.token)
                 for (soundA, ctxtA), (soundB, ctxtB) in self.sounds_and_contexts(almA,
                                                                                  almB):
                     if IGNORE.isdisjoint({soundA, soundB}):
@@ -809,9 +814,19 @@ class Correspondences(object):
                             self.examples[event].append((wordA, wordB))
 
     def evaluate_alignment(self, path, sound_model, filename):
+
+        # specific settings to maximise compatibility
+
+        # If we keep this to "True", sequences are re-tokenised when calling PSA
+        # as the gold sequences are already merged
+        lingpy.settings.rcParams["merge_vowels"] = True
+        # This allows to keep sequences with sounds unknown from CLTS.
+        # We just won't coarsen them.
+        sound_model.silent_errors = True
+
         gold = lingpy.PSA(path) # used for evaluation
         pred = lingpy.PSA(path) # alignments will be replaced by our method
-        sound_model.silent_errors = True
+        lingpy.settings.rcParams["merge_vowels"] = False
 
         for i, (seqA, seqB) in enumerate(pred.tokens):
             # Replace sequences with coarsened sequences
@@ -968,6 +983,20 @@ def run(args):
                                  A.lang.glottocode, B.lang.glottocode,
                                  A.sound, B.sound, A.context, B.context, count, examples])
 
+
+    pairs_in_dataset = 0
+    pairs_across_datasets = 0
+    with open(output_prefix + '_pairs_count_by_datasets.csv', 'w', encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerow(["DatasetA", "DatasetB", "Number_of_cognate_pairs"])
+        for (dA, dB) in corresp_finder.cognates_pairs_by_datasets:
+            count =corresp_finder.cognates_pairs_by_datasets[(dA, dB)]
+            writer.writerow([dA, dB, count])
+            if dA == dB:
+                pairs_in_dataset += count
+            else:
+                pairs_across_datasets += count
+
     with open(output_prefix + '_available.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
         writer.writerow(["Family", "Genus", "Sound A", "Sound B"])
@@ -994,6 +1023,8 @@ def run(args):
     metadata_dict["n_genera"] = len(data.genera_to_lang)
     metadata_dict["n_concepts"] = len(data.concepts_subset)
     metadata_dict["n_tokens"] = len(data.data)
+    metadata_dict["n_cognate_pairs_across_datasets"] = pairs_across_datasets
+    metadata_dict["n_cognate_pairs_in_datasets"] = pairs_in_dataset
     metadata_dict["threshold_method"] = "normalized per syllable"
     metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
     metadata_dict["alignment_method"] = args.alignment

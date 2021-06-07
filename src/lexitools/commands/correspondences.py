@@ -189,7 +189,7 @@ class Lang(metaclass=FlyWeight):
 
 @dataclass(eq=True, frozen=True)
 class Sound(metaclass=FlyWeight):
-    """ Sound in a correspondence, in a specific genus, language, and context.
+    """ Sound in a correspondence, in a specific  languge, and context.
 
         This class is FlyWeight: we don't want duplicate objects for the exact
         same sound in context.
@@ -820,6 +820,7 @@ class Correspondences(object):
         # If we keep this to "True", sequences are re-tokenised when calling PSA
         # as the gold sequences are already merged
         lingpy.settings.rcParams["merge_vowels"] = True
+
         # This allows to keep sequences with sounds unknown from CLTS.
         # We just won't coarsen them.
         sound_model.silent_errors = True

@@ -16,13 +16,15 @@ vowel,tone=,,
 vowel,articulation=,,
 vowel,breathiness=,,
 vowel,glottalization=,,
-vowel,height=open&centrality=front&roundedness=unrounded,height=open&centrality=central&roundedness=unrounded,re-assign [a] as non-front
 vowel,centrality=near-back,centrality=back,reduce centrality to three values
 vowel,centrality=near-front,centrality=front,reduce centrality to three values
 vowel,height=near-close,height=close,reduce height to three values
 vowel,height=close-mid,height=mid,reduce height to three values
 vowel,height=open-mid,height=mid,reduce height to three values
 vowel,height=near-open,height=open,reduce height to three values
+vowel,height=open&centrality=back,height=open,neutralize centrality for [ɑ]/[ɒ]
+vowel,height=open&centrality=front,height=open,neutralize centrality for [a]
+vowel,height=open&centrality=central,height=open,neutralize centrality for [ɐ]
 consonant,aspiration=aspirated&phonation=voiceless&place=dental&manner=affricate&laterality=None,aspiration=aspirated&phonation=voiceless&place=dental&manner=affricate&sibilancy=sibilant,this is a custom rule to correct the value of ts̪ʰ in CLTS v1.4.1. This rule is ordered
 consonant,aspiration=,,
 consonant,creakiness=,,

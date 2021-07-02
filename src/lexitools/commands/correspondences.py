@@ -345,10 +345,14 @@ class SoundCorrespsByGenera(object):
 
             lang = langs[row["Language_ID"]]
 
+            cog_id = row.get("Cognacy", None)
+            if cog_id is None:
+                cog_id = row.get("Cognateset_ID", None)
+
             # TODO: also add COGID
             word = Word(lang=lang, syllables=syllables,
                         token=token, concept=concept, id=row["ID"],
-                        cognate_id=row.get("Cognateset_ID", None),
+                        cognate_id=cog_id,
                         original_token=" ".join(row["Segments"]), dataset=row["dataset"])
 
             self.data[(lang, concept)][" ".join(token)].append(word)
@@ -481,6 +485,12 @@ def register(parser):
         help='select an alignment method: either of SCA or a simple scorer '
              'which penalizes C/V matches and forbids T/C & T/V matches.')
     parser.add_argument(
+        '--cognate_eval',
+        action='store_true',
+        default=False,
+        help='Evaluate cognate detection.')
+
+    parser.add_argument(
         '--bdpa',
         action='store',
         default=None,
@@ -508,15 +518,20 @@ class Correspondences(object):
         total_cognates (Counter): counts the number of cognates found for each pair of languages.
         tones (set): characters which denote tones. Allow for a fast identification.
             (using calls to bipa is too slow)
+        get_features (func): function to get sound features
+        eval_cognates (bool): whether to evaluate cognacy detection.
     """
 
-    def __init__(self, args, data, clts, align_method):
+    def __init__(self, args, data, clts, align_method, features_func=None, eval_cognates=False):
         """ Initialization only records the arguments and defines the attributes.
 
         Args:
             args: the full args passed to the correspondences command.
             data (SoundCorrespsByGenera): the data
             clts (pyclts.CLTS): a clts instance
+            eval_cognates (bool): whether to evaluate cognacy detection.
+            cognate_confusion_matrix (list of list): confusion matrix
+            features_func (func): function to get sound features
         """
         self.args = args
         self.data = data
@@ -528,6 +543,14 @@ class Correspondences(object):
         self.total_cognates = Counter()
         self.tones = set("⁰¹²³⁴⁵˥˦˧˨↓↑↗↘")
         self.cognates_pairs_by_datasets = Counter()
+        self.get_features = features_func
+        self.score_cache = {}
+        self.cognate_detection = Counter()
+        self.cognate_eval = eval_cognates
+        self.cognate_confusion_matrix = [#T  F (predicted)
+                                         [0, 0],# T gold
+                                         [0, 0] # F gold
+                                        ]
         if align_method == "sca":
             self.align = self.align_sca
         elif align_method == "simple":
@@ -668,6 +691,64 @@ class Correspondences(object):
             prevB = prevB if catsB[i] is None else catsB[i]
             yield (sA, cA), (sB, cB)
 
+    def score(self, a, b):
+
+        try:
+            return self.score_cache[(a,b)]
+        except KeyError:
+            if a == b :
+                self.score_cache[(a,b)] = 1
+                self.score_cache[(b,a)] = 1
+                return 1
+            a_cat = self.tones.isdisjoint(a)
+            b_cat = self.tones.isdisjoint(b)
+            if a_cat != b_cat:
+                self.score_cache[(a,b)] = -10
+                self.score_cache[(b,a)] = -10
+                return -10
+
+            if self.get_features is None:  # no features, mismatch default
+                ba = self.bipa(a)
+                bb = self.bipa(b)
+                if ba.type != bb.type:
+                    self.score_cache[(a,b)] = -1.5
+                    self.score_cache[(b,a)] = -1.5
+                    return -1.5
+
+                self.score_cache[(a,b)] = -1
+                self.score_cache[(b,a)] = -1
+                return -1
+
+            else:  # mismatch according to similarity
+                fa = self.get_features(a)
+                fb = self.get_features(b)
+                if type(fa) == tuple:
+                    if type(fb) == tuple:
+                        # For two complex sounds, compare together first and second elements
+                        common = len(fa[0] & fb[0]) + len(fa[1] & fb[1])
+                        total = len(fa[0] | fb[0]) + len(fa[1] | fb[1])
+                    else:
+                        # Complex sound & simple: anything in common with
+                        # the first or second part of the complex sound is taken into account
+                        common = len((fa[0] & fb)  | (fa[1] & fb))
+                        total = len(fa[0] | fb | fa[1])
+                elif type(fb) == tuple:
+                    # Complex sound & simple: anything in common with
+                    # the first or second part of the complex sound is taken into account
+                    common = len((fa & fb[0]) |(fa & fb[1]))
+                    total = len(fa | fb[0] | fb[1])
+                else:
+                    # Two simple sounds: simple jaccard index
+                    common = len(fa & fb)
+                    total = len(fa | fb)
+
+                sim = common / total
+                # Over .5 similarity will result in positive scores. Under, will result in negative scores.
+                score = sim-0.5
+                self.score_cache[(a,b)] = score
+                self.score_cache[(b,a)] = score
+                return score
+
     def get_scorer(self, seqA, seqB):
         """ Returns an alignment scorer which penalizes tone alignments with non tones.
 
@@ -678,6 +759,8 @@ class Correspondences(object):
 
         - 1 for a match,
         - -10 for mismatches involving a tone and something that is not a tone,
+
+        If we don't have access to features:
         - -1.5 for other cross-category mismatches
         - -1 for in-category mismatches and indels
 
@@ -685,6 +768,8 @@ class Correspondences(object):
         only a notational trick, as they actually belong to a different tier.
         The reason to prefer in-category matches is to favor alignments of type CV/-V
         rather than CV/V-.
+
+        If we have access to features: the featural similarity between sounds.
 
         For reference, the default lingpy scorer is:
         >>> {(a, b): 1.0 if a == b else -1.0 for a, b in product(seqA, seqB)}
@@ -697,19 +782,8 @@ class Correspondences(object):
             scorer (dict): maps from pairs of sounds to score.
         """
 
-        def score(a, b):
-            if a == b:
-                return 1
-            a_cat = self.tones.isdisjoint(a)
-            b_cat = self.tones.isdisjoint(b)
-            if a_cat != b_cat:
-                return -10
-            elif self.bipa(a).type != self.bipa(b).type:
-                return -1.5
-            else:
-                return -1
 
-        return {(a, b): score(a, b) for a, b in product(seqA, seqB)}
+        return {(a, b): self.score(a, b) for a, b in product(seqA, seqB)}
 
     def are_cognate(self, wordA, wordB):
         """ Test if two words are cognates.
@@ -734,33 +808,61 @@ class Correspondences(object):
         Returns:
             cognacy (bool): whether the two words should be considered cognates.
         """
+        def below_threshold(wordA, wordB):
+            # Identical words are cognate
+            tokA, tokB = wordA.token, wordB.token
+            if tokA == tokB:
+                return True
+
+            # Identical sequences of sound classes are cognates
+            tokA = [self.sca(s) for s in tokA]
+            tokB = [self.sca(s) for s in tokB]
+            if tokA == tokB:
+                return True
+
+            # Use a threshold on sequence similarity
+            allowed = self.allowed_differences(wordA.syllables, wordB.syllables)
+
+            # Estimate a lower boundary by checking character sets.
+            # If A has n more characters than B, and B m more,
+            # and m > n, then we need at least m edits
+            # (n substitutions, and m-n insertions)
+            # Of course, it is likely to be more, but this is enough to
+            # decide cases where tokens are very different
+            sa, sb = set(tokA), set(tokB)
+            lower_boundary = max(len(sa - sb), len(sb - sa))
+            if lower_boundary > allowed:
+                return False
+
+            # bottleneck
+            return lingpy.edit_dist(tokA, tokB) <= allowed
+
         # In a single dataset with gold cognate IDs, rely on it
-        if wordA.dataset == wordB.dataset and wordA.cognate_id is not None:
-            return wordA.cognate_id == wordB.cognate_id
+        is_cognate = None
+        cognate_type = None
+        if wordA.dataset == wordB.dataset and wordA.cognate_id is not None or wordB.cognate_id is not None:
+            is_cognate = wordA.cognate_id == wordB.cognate_id
+            if is_cognate:
+                cognate_type = "Gold cognates"
+            else:
+                cognate_type = "Gold non cognates"
 
-        # Identical words are cognate
-        tokA, tokB = wordA.token, wordB.token
-        if tokA == tokB: return True
+        if is_cognate is None or self.cognate_eval:
+            cognate_guess = below_threshold(wordA, wordB)
 
-        # Identical sequences of sound classes are cognates
-        tokA = [self.sca(s) for s in tokA]
-        tokB = [self.sca(s) for s in tokB]
-        if tokA == tokB: return True
+            if is_cognate is None:
+                cognate_type = "detected cognates" if cognate_guess else "rejected cognates"
+            else:
+                # record evaluation info
+                i, j = int(not is_cognate), int(not cognate_guess)
+                self.cognate_confusion_matrix[i][j] += 1
 
-        # Use a threshold on sequence similarity
-        allowed = self.allowed_differences(wordA.syllables, wordB.syllables)
+        self.cognate_detection[cognate_type] += 1
 
-        # Estimate a lower boundary by checking character sets.
-        # If A has n more characters than B, and B m more,
-        # and m > n, then we need at least m edits
-        # (n substitutions, and m-n insertions)
-        # Of course, it is likely to be more, but this is enough to
-        # decide cases where tokens are very different
-        sa, sb = set(tokA), set(tokB)
-        lower_boundary = max(len(sa - sb), len(sb - sa))
-        if lower_boundary > allowed: return False
+        if is_cognate is None:
+            return cognate_guess
 
-        return lingpy.edit_dist(tokA, tokB) <= allowed  # This is the bottleneck
+        return is_cognate
 
     def align_simple(self, a, b):
         """ Perform the alignment using a simple method and custom scorer."""
@@ -888,6 +990,7 @@ def run(args):
         `Dataset,Language_ID,Sound,Token,ID`.
     `_metadata.json`: a json file recording the input parameters and all relevant metadata.
     """
+    args.log.info(args)
     langgenera_path = "./src/lexitools/commands/lang_genera-v1.0.0.tsv"
     clts = args.clts.from_config().api
     now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
@@ -903,11 +1006,17 @@ def run(args):
     if args.model == "BIPA":
         def to_sound_class(sound):
             return str(clts.bipa[sound])
+        def sound_features(sound):
+            return clts.bipa[sound].featureset
+
     elif args.model == "Coarse":
         coarse = Coarsen(clts.bipa, "src/lexitools/commands/default_coarsening.csv")
 
         def to_sound_class(sound):
             return coarse[sound]
+        def sound_features(sound):
+            return coarse.features.get(sound, {})
+
     elif args.model == "ASJPcode":
         if args.dataset != "lexibank/asjp":
             raise ValueError("ASJPcode only possible with lexibank/asjp")
@@ -915,6 +1024,8 @@ def run(args):
 
         def to_sound_class(sound):
             return sound  # we will grab the graphemes column
+
+        sound_features = None
     else:
         raise ValueError("Incorrect sound class model")
 
@@ -936,7 +1047,9 @@ def run(args):
             len(data.concepts_subset)))
 
     corresp_finder = Correspondences(args, data, clts,
-                                     align_method=args.alignment)
+                                     features_func=sound_features,
+                                     align_method=args.alignment,
+                                     eval_cognates=args.cognate_eval)
 
     align_eval = {}
     if args.model == "Coarse" and args.bdpa is not None:
@@ -1012,6 +1125,15 @@ def run(args):
             kept = corresp_finder.total_cognates[(lA, lB)]
             writer.writerow([lA.glottocode, lB.glottocode, concepts, kept])
 
+
+    with open(output_prefix + '_alignment_scores.csv', 'w',
+              encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerow(["A", "B", "score", "A feat", "B feat"])
+        for a,b in corresp_finder.score_cache:
+            writer.writerow([a, b, corresp_finder.score_cache[(a,b)],
+                             sound_features(a), sound_features(b)])
+
     metadata_dict = {"observation cutoff": args.cutoff,
                      "similarity threshold": args.threshold,
                      "model": args.model,
@@ -1029,6 +1151,15 @@ def run(args):
     metadata_dict["threshold_method"] = "normalized per syllable"
     metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
     metadata_dict["alignment_method"] = args.alignment
+    metadata_dict["gold_cognates_found"] = corresp_finder.cognate_detection["Gold cognates"]
+    metadata_dict["gold_non_cognates"] = corresp_finder.cognate_detection["Gold non cognates"]
+    metadata_dict["detected_cognates"] = corresp_finder.cognate_detection["detected cognates"]
+    metadata_dict["rejected_word_pairs"] = corresp_finder.cognate_detection["rejected cognates"]
+    if args.cognate_eval:
+        metadata_dict["cognate_eval_TP"] = corresp_finder.cognate_confusion_matrix[0][0]
+        metadata_dict["cognate_eval_FP"] = corresp_finder.cognate_confusion_matrix[1][0]
+        metadata_dict["cognate_eval_FN"] = corresp_finder.cognate_confusion_matrix[0][1]
+        metadata_dict["cognate_eval_TN"] = corresp_finder.cognate_confusion_matrix[1][1]
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:

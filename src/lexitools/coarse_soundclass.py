@@ -111,6 +111,7 @@ class Coarsen(object):
         self.bipa = bipa
         self.rules = self._parse_config(config_path)
         self.labels = {}  # coarse feature set -> coarse string
+        self.features = {}  #  coarse string -> coarse feature set
         self.cache = {}  # bipa string -> coarse string
         self.silent_errors = False # By default, throw on unknown clts sound
 
@@ -131,6 +132,7 @@ class Coarsen(object):
         for f in sounds:
             name = self._create_label(f, sounds[f])
             self.labels[f] = str(name)
+            self.features[str(name)] = f
             for s in sounds[f]:
                 self.cache[str(s)] = str(name)  # Instead, first try for the name
 
@@ -252,6 +254,7 @@ class Coarsen(object):
                     coarse_sound =  item
                     fs = frozenset({("unknownSound", str(item))})
                     self.labels[fs] = item
+                    self.features[item] = fs
                 else:
                     raise ValueError("Unknown sound " + item)
             elif isinstance(sound, COMPOSITE):
@@ -263,6 +266,9 @@ class Coarsen(object):
                     coarse_sound = self[str(new_sound)]
                 else:
                     coarse_sound = sa + sb
+                    fa, fb = self.features[sa], self.features[sb]
+                    self.features[coarse_sound] = (fa, fb) # for similarity computation
+                    self.labels[(fa, fb)] = coarse_sound
             else:
                 coarse_sound = self.coarsen_sound(sound)
             self.cache[item] = coarse_sound
@@ -286,7 +292,9 @@ class Coarsen(object):
         try:
             return self.labels[f]
         except KeyError:
-            self.labels[f] = str(self._create_label(f, {simple_sound}))
+            name = str(self._create_label(f, {simple_sound}))
+            self.labels[f] = name
+            self.features[name] = f
             return str(simple_sound)
 
     def get_coarse_features(self, sound):
@@ -333,6 +341,7 @@ class Coarsen(object):
         for fs in self.labels:
             coarse = self.labels[fs]
             all_bipa = reversed_cache[coarse]
-            rows.append(
-                [" ".join(all_bipa), coarse, " ".join(sorted(f + "=" + v for f, v in fs))])
+            if type(fs) is not tuple:
+                rows.append(
+                    [" ".join(all_bipa), coarse, " ".join(sorted(f + "=" + v for f, v in fs))])
         return rows

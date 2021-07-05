@@ -11,7 +11,7 @@ from cldfcatalog import Config
 
 import lingpy
 import lingpy.evaluate
-from itertools import combinations, product
+from itertools import combinations
 from collections import Counter, defaultdict
 from pylexibank import progressbar
 import pyglottolog
@@ -24,70 +24,91 @@ from cldfbench import get_dataset
 import sys
 import json
 from lexitools.coarse_soundclass import Coarsen
-from typing import List
+
+import logging
 
 # Do not merge consecutive vowels into diphthongs
 lingpy.settings.rcParams["merge_vowels"] = False
 
 # import cProfile
 
-LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
-            ('lexibank', 'allenbai'), ('lexibank', 'bdpa'),
-            ('lexibank', 'beidasinitic'), ('lexibank', 'birchallchapacuran'),
-            ('sequencecomparison', 'blustaustronesian'),
-            ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
-            ('lexibank', 'cals'), ('lexibank', 'castrosui'),
-            ('lexibank', 'castroyi'), ('lexibank', 'chaconarawakan'),
-            ('lexibank', 'chaconbaniwa'), ('lexibank', 'chaconcolumbian'),
-            ('lexibank', 'chenhmongmien'), ('lexibank', 'chindialectsurvey'),
-            ('lexibank', 'davletshinaztecan'), ('lexibank', 'deepadungpalaung'),
-            ('lexibank', 'dravlex'), ('lexibank', 'dunnaslian'),
-            ('sequencecomparison', 'dunnielex'), ('lexibank', 'galuciotupi'),
-            ('lexibank', 'gerarditupi'), ('lexibank', 'halenepal'),
-            ('lexibank', 'hantganbangime'),
-            ('sequencecomparison', 'hattorijaponic'),
-            ('sequencecomparison', 'houchinese'),
-            ('lexibank', 'hubercolumbian'), ('lexibank', 'ivanisuansu'),
-            ('lexibank', 'johanssonsoundsymbolic'),
-            ('lexibank', 'joophonosemantic'),
-            ('sequencecomparison', 'kesslersignificance'),
-            ('lexibank', 'kraftchadic'), ('lexibank', 'leekoreanic'),
-            ('lexibank', 'lieberherrkhobwa'), ('lexibank', 'lundgrenomagoa'),
-            ('lexibank', 'mannburmish'), ('lexibank', 'marrisonnaga'),
-            ('lexibank', 'mcelhanonhuon'), ('lexibank', 'mitterhoferbena'),
-            ('lexibank', 'naganorgyalrongic'), ('lexibank', 'northeuralex'),
-            ('lexibank', 'peirosaustroasiatic'),
-            ('lexibank', 'pharaocoracholaztecan'), ('lexibank', 'robinsonap'),
-            ('lexibank', 'sagartst'), ('lexibank', 'savelyevturkic'),
-            ('lexibank', 'sohartmannchin'),
-            ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
-            ('lexibank', 'transnewguineaorg'), ('lexibank', 'tryonsolomon'),
-            ('lexibank', 'walkerarawakan'), ('lexibank', 'walworthpolynesian'),
-            ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
-            ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
-            ('sequencecomparison', 'zhivlovobugrian'),
-            ('lexibank', 'backstromnorthernpakistan'),
-             ('lexibank', 'baf2'),
-             ('lexibank', 'clarkkimmun'),
-             ('lexibank', 'housinitic'),
-             ('lexibank', 'hsiuhmongmien'),
-             ('lexibank', 'lamayi'),
-             ('lexibank', 'liusinitic'),
-             ('lexibank', 'mortensentangkhulic'),
-             ('lexibank', 'polyglottaafricana'),
-             ('lexibank', 'simsrma'),
-             ('lexibank', 'starostinhmongmien'),
-             ('lexibank', 'starostinkaren'),
-             ('lexibank', 'tppsr'),
-             ('lexibank', 'vanbikkukichin'),
-             ('lexibank', 'wangbai'),
-             ('lexibank', 'wheelerutoaztecan'),
-             ('lexibank', 'wichmannmixezoquean'),
-             ('sequencecomparison', 'listsamplesize')
-            ]
+LEXICORE = [
+    ('lexibank', 'aaleykusunda'),
+    ('lexibank', 'abrahammonpa'),
+    ('lexibank', 'allenbai'),
+    ('lexibank', 'bdpa'),
+    ('lexibank', 'beidasinitic'), ('lexibank', 'birchallchapacuran'),
+    ('sequencecomparison', 'blustaustronesian'),
+    ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
+    ('lexibank', 'cals'), ('lexibank', 'castrosui'),
+    ('lexibank', 'castroyi'), ('lexibank', 'chaconarawakan'),
+    ('lexibank', 'chaconbaniwa'), ('lexibank', 'chaconcolumbian'),
+    ('lexibank', 'chenhmongmien'), ('lexibank', 'chindialectsurvey'),
+    ('lexibank', 'davletshinaztecan'), ('lexibank', 'deepadungpalaung'),
+    ('lexibank', 'dravlex'), ('lexibank', 'dunnaslian'),
+    ('sequencecomparison', 'dunnielex'), ('lexibank', 'galuciotupi'),
+    ('lexibank', 'gerarditupi'), ('lexibank', 'halenepal'),
+    ('lexibank', 'hantganbangime'),
+    ('sequencecomparison', 'hattorijaponic'),
+    ('sequencecomparison', 'houchinese'),
+    ('lexibank', 'hubercolumbian'), ('lexibank', 'ivanisuansu'),
+    ('lexibank', 'johanssonsoundsymbolic'),
+    ('lexibank', 'joophonosemantic'),
+    ('sequencecomparison', 'kesslersignificance'),
+    ('lexibank', 'kraftchadic'), ('lexibank', 'leekoreanic'),
+    ('lexibank', 'lieberherrkhobwa'), ('lexibank', 'lundgrenomagoa'),
+    ('lexibank', 'mannburmish'), ('lexibank', 'marrisonnaga'),
+    ('lexibank', 'mcelhanonhuon'), ('lexibank', 'mitterhoferbena'),
+    ('lexibank', 'naganorgyalrongic'), ('lexibank', 'northeuralex'),
+    ('lexibank', 'peirosaustroasiatic'),
+    ('lexibank', 'pharaocoracholaztecan'), ('lexibank', 'robinsonap'),
+    ('lexibank', 'sagartst'), ('lexibank', 'savelyevturkic'),
+    ('lexibank', 'sohartmannchin'),
+    ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
+    ('lexibank', 'transnewguineaorg'), ('lexibank', 'tryonsolomon'),
+    ('lexibank', 'walkerarawakan'),
+    ('lexibank', 'walworthpolynesian'),
+    ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
+    ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
+    ('sequencecomparison', 'zhivlovobugrian'),
+    ('lexibank', 'backstromnorthernpakistan'),
+    ('lexibank', 'baf2'),
+    ('lexibank', 'clarkkimmun'),
+    ('lexibank', 'housinitic'),
+    ('lexibank', 'hsiuhmongmien'),
+    ('lexibank', 'lamayi'),
+    ('lexibank', 'liusinitic'),
+    ('lexibank', 'mortensentangkhulic'),
+    ('lexibank', 'polyglottaafricana'),
+    ('lexibank', 'simsrma'),
+    ('lexibank', 'starostinhmongmien'),
+    ('lexibank', 'starostinkaren'),
+    ('lexibank', 'tppsr'),
+    ('lexibank', 'vanbikkukichin'),
+    ('lexibank', 'wangbai'),
+    ('lexibank', 'wheelerutoaztecan'),
+    ('lexibank', 'wichmannmixezoquean'),
+    ('sequencecomparison', 'listsamplesize')
+]
+
+# These ones have cognate ids:
+# bdpa
+# birchallchapacuran
+# lieberherrkhobwa
+# sagartst
+# walworthpolynesian
+# yanglalo
+# baf2
+# starostinhmongmien
+# starostinkaren
+# wichmannmixezoquean
+
+# TODO: synonyms: prune identical rows which differ only by dataset
+
 
 # set of characters which should be ignored in tokens (markers, etc)
 IGNORE = {"+", "*", "#", "_", ""}
+
 
 class MockLexicore(object):
     """ Mock interface to lexicore datasets.
@@ -223,34 +244,6 @@ class Sound(metaclass=FlyWeight):
     context: str
 
 
-@dataclass
-class Word:
-    """ A word in a specific language and dataset.
-
-    A word is linked to a dataset row and carries its ID, so that we can refer back to
-    the data it originates from.
-
-    Attributes:
-        lang (Lang) : the language in which this token was observed
-        token (str): the token
-        concept (str): the concept denoted by the token (concepticon ID)
-        syllables (int): number of syllables in the token
-        original_token (str): the original lexibank token (from Segments)
-        dataset (str): the dataset where this token was recorded
-        id (str): the identifier for the row in the dataset's wordlist
-    """
-    __slots__ = ('lang', 'token', 'concept', 'syllables', 'original_token',
-                 'dataset', 'id', 'cognate_id')
-    lang: Lang
-    token: List[str]
-    concept: str
-    syllables: int
-    original_token: str
-    dataset: str
-    id: str
-    cognate_id: str
-
-
 class SoundCorrespsByGenera(object):
     """ Loads lexibank data, organized by genera, to facilitate the counting of correspondences.
 
@@ -264,7 +257,7 @@ class SoundCorrespsByGenera(object):
             for each pair of languages encountered in a genera.
         concepts_subset (set): the set of all concepts which will be kept.
         lang_to_concept (defaultdict): mapping of Lang to concepts.
-        data (defaultdict): mapping of (lang, concept) -> token string -> word instances
+        _data (defaultdict): mapping of (lang, concept) -> token string -> word instances
            A language can have more that one token for a specific
          concept, and a single token can be found in more than one dataset. A Word represents
          exactly one token in a given language and dataset.
@@ -288,6 +281,17 @@ class SoundCorrespsByGenera(object):
             sound string.
             glottolog (pyglottolog.Glottolog): Glottolog instance to retrieve family names.
         """
+        # This mixes some lingpy specific headers (used to init lexstat)
+        # and some things we need specifically for this application
+        namespace = ['doculect', 'concept', 'concepticon', 'original_token',
+                     'original_id', 'tokens', 'glottocode',
+                     'cogid', 'cldf_dataset']
+        self.cols = {n: i for i, n in enumerate(namespace)}
+        self.evals = {}
+
+        # dict of genus -> lingpy internal Wordlist dict
+        self._data = defaultdict(lambda: {0: namespace})
+
         self.sound_class = sound_class
 
         with csvw.UnicodeDictReader(langgenera_path, delimiter="\t") as reader:
@@ -296,16 +300,18 @@ class SoundCorrespsByGenera(object):
         # Obtain glottocode and family:
         # family can be obtained from glottolog (this is slow) if glottolog is loaded
         # if there is no glottocode, we can still use the hardcoded family
-        langs = {}
+        self.languages = {}
         # this is less slow than calling .langoid(code) for each code
         langoids = glottolog.languoids_by_code()
         self.errors = [["Dataset", "Language_ID", "Sound", "Token", "ID"]]
         self.concepts_intersection = Counter()
-        self.populate_genera_to_lang(db, lang_to_genera, langoids, langs)
+        self.populate_genera_to_lang(db, lang_to_genera, langoids)
 
-        concepts = {row["ID"]: row["Concepticon_ID"] for row in
+        concepts = {row["ID"]: (row["Concepticon_ID"], row["Concepticon_Gloss"])
+                    for row in
                     db.iter_table('ParameterTable')}
 
+        # Define concept list
         if concept_list is not None:
             concepticon = Concepticon(Config.from_file().get_clone("concepticon"))
             concept_dict = concepticon.conceptlists[concept_list].concepts
@@ -313,51 +319,52 @@ class SoundCorrespsByGenera(object):
                                     concept_dict.values() if
                                     c.concepticon_id}
         else:  # All observed concepts
-            self.concepts_subset = set(concepts.values())
+            self.concepts_subset = {i for i, j in concepts.values()}
 
-        self.lang_to_concept = defaultdict(set)
-        self.data = defaultdict(lambda: defaultdict(list))
+        for idx, row in progressbar(enumerate(db.iter_table('FormTable')),
+                                    desc="Loading data..."):
 
-        for row in progressbar(db.iter_table('FormTable'),
-                               desc="Loading data..."):
+            idx = idx + 1  # 0 is the header row, so we need to offset all data indexes
 
             # Ignore loan words
             if row.get("Loan", ""): continue
 
-            concept = concepts[row["Parameter_ID"]]
-            if concept not in self.concepts_subset or \
-                    row["Language_ID"] not in langs or \
+            # Ignore words without a concept in the current list,
+            # with an incorrect language identifier, or without a form
+            concept_id, concept_gloss = concepts[row["Parameter_ID"]]
+
+            if concept_id is None or \
+                    concept_id not in self.concepts_subset or \
+                    row["Language_ID"] not in self.languages or \
                     row["Segments"] is None:
                 continue
 
-            # TODO: if it has COGIDS, split on morphemes
-            # TODO: add a Word for each morpheme + morpheme cogid
-
+            # Convert sounds, ignore rows with unknown or ignored sounds
             try:
-                token = list(self._iter_phonemes(row))
+                tokens = list(self._iter_phonemes(row))
             except ValueError:
                 continue  # unknown sounds
-            if all([s in IGNORE for s in token]): continue
+            if all([s in IGNORE for s in tokens]): continue
 
-            syllables = len(lingpy.sequence.sound_classes.syllabify(token,
-                                                                    output="nested"))
+            language = self.languages[row["Language_ID"]]
+            cogid = row.get("Cognacy", None)
+            if cogid is None:
+                cogid = row.get("Cognateset_ID", None)
 
-            lang = langs[row["Language_ID"]]
+            # Build internal dataset per genus
+            self._data[language.genus][idx] = [
+                row["Language_ID"],  # doculect
+                concept_gloss,
+                concept_id,
+                " ".join(row["Segments"]),
+                row["ID"],
+                tokens,
+                language.glottocode,
+                # extract glottocode for lingpy ?
+                cogid,
+                row["dataset"]]
 
-            cog_id = row.get("Cognacy", None)
-            if cog_id is None:
-                cog_id = row.get("Cognateset_ID", None)
-
-            # TODO: also add COGID
-            word = Word(lang=lang, syllables=syllables,
-                        token=token, concept=concept, id=row["ID"],
-                        cognate_id=cog_id,
-                        original_token=" ".join(row["Segments"]), dataset=row["dataset"])
-
-            self.data[(lang, concept)][" ".join(token)].append(word)
-            self.lang_to_concept[lang].add(concept)
-
-    def populate_genera_to_lang(self, db, lang_to_genera, langoids, langs):
+    def populate_genera_to_lang(self, db, lang_to_genera, langoids):
         self.genera_to_lang = defaultdict(set)
         for row in progressbar(db.iter_table("LanguageTable"), desc="listing languages"):
             gcode = row["Glottocode"]
@@ -371,7 +378,61 @@ class SoundCorrespsByGenera(object):
 
             lang = Lang(genus=genus, family=family, glottocode=gcode, name=langoid.name)
             self.genera_to_lang[genus].add(lang)
-            langs[row["ID"]] = lang
+            self.languages[row["ID"]] = lang
+
+    def __getitem__(self, args):
+        cols = list(self.cols)
+        genus, item = args
+        if type(item) is int:
+            return dict(zip(cols, self._data[genus][item]))
+        return [self[genus, i] for i in item]
+
+    def find_cognates(self, eval=False):
+        lingpy.log.get_logger().setLevel(logging.WARNING)
+        pbar = progressbar(self._data, desc="looking for cognates...")
+        for genus in pbar:
+            pbar.set_description("looking for cognates in genus %s" % genus)
+            lex = lingpy.LexStat(self._data[genus], check=True)
+            lex.get_scorer(runs=1000)
+            lex.cluster(method='lexstat', threshold=0.55, ref="pred_cogid",
+                        cluster_method='infomap')
+            # lex.output('tsv', filename=file_template.format(genus))
+
+            ## here create a new column based on pred and gold cogids ?
+
+            alm = lingpy.Alignments(lex, ref="pred_cogid")
+            alm.align(method='progressive', scoredict=lex.cscorer)
+
+            for cognate_idx in alm.etd["pred_cogid"]:
+                # list concatenation of the cognate indexes
+                cognateset = sum(
+                    [x for x in alm.etd["pred_cogid"][cognate_idx] if x != 0], [])
+                rows = self[genus, cognateset]
+                alignments = [alm[i, "alignment"] for i in cognateset]
+                yield rows, alignments
+
+            if eval:
+                # separate data by dataset, keep only if gold annotation exists
+                by_datasets = defaultdict(lambda: [self._data[genus][0]])
+
+                for i, r in self._data[genus].items():
+                    if i > 0 and r[self.cols['cogid']] is not None:
+                        dataset = r[self.cols['cldf_dataset']]
+                        by_datasets[dataset].append(r)
+
+                # Evaluate inside each dataset
+                # This re-runs lexstat, but it is the only clean way I found to evaluate
+                for dataset in by_datasets:
+                    pbar.set_description("evaluating against gold rows in %s" % dataset)
+                    gold_rows = dict(enumerate(by_datasets[dataset]))
+                    lex = lingpy.LexStat(gold_rows)
+                    lex.get_scorer(runs=1000)
+                    lex.cluster(method='lexstat', threshold=0.55, ref="pred_cogid",
+                                cluster_method='infomap')
+
+                    self.evals[dataset] = lingpy.evaluate.acd.bcubes(lex, gold='cogid',
+                                                                     test='pred_cogid',
+                                                                     pprint=False)
 
     def _iter_phonemes(self, row):
         """ Iterate over pre-processed phonemes from a row's token.
@@ -404,49 +465,16 @@ class SoundCorrespsByGenera(object):
                                     " ".join(str(x) for x in segments), row["ID"]))
                 raise e
 
-    def iter_candidates(self):
-        """ Iterate over word pair candidates.
-
-        Across all datasets, inside each genus, we consider all token
-        pairs for the same concept in all language pairs.
-
-        Yields:
-            tuples of `genus, (langA, tA, sA), (langB, tB, sB)`
-                genus (str): genus name
-                langA (str) and langB (str): glottocodes for the two languages
-                tA (list of str) and tB (list of str): the two tokens
-                sA (int) and sB (int): the syllable count for each token
+    def __iter__(self):
+        """Iterate over all (family, genus, lang, tokens) in the dataset.
         """
-        for genus in progressbar(self.genera_to_lang, desc="Genera"):
-            langs = self.genera_to_lang[genus]
-            lang_pairs = combinations(langs, r=2)
-            n_lang = len(langs)
-            tot_pairs = (n_lang * (n_lang - 1)) / 2
-            for langA, langB in progressbar(lang_pairs, total=tot_pairs,
-                                            desc="Language pairs"):
-                concepts_A = self.lang_to_concept[langA]
-                concepts_B = self.lang_to_concept[langB]
-                common_concepts = (concepts_A & concepts_B)
-                self.concepts_intersection[(langA, langB)] += len(common_concepts)
-                for concept in common_concepts:
-                    for tokA, tokB in product(self.data[(langA, concept)],
-                                              self.data[(langB, concept)]):
-                        # Here we grab the first word, but there may be other words,
-                        # if this token is documented in other datasets.
-                        # So far we don't really need the information.
-                        wordA = self.data[(langA, concept)][tokA][0]
-                        wordB = self.data[(langB, concept)][tokB][0]
-                        yield wordA, wordB
-
-    def __iter__(self): # TODO: maintain the possibility of iterating over tokens
-        """Iterate over all Words in the datasets.
-
-        Yields:
-            all known Word instances in the dataset (ignore synonyms).
-        """
-        for lang, concept in self.data:
-            for token in self.data[(lang, concept)]:
-                yield self.data[(lang, concept)][token][0]  # also picking a single word
+        for genus in self._data:
+            for idx in self._data[genus]:
+                if idx > 0:
+                    row = self._data[genus][idx]
+                    doculect = row[self.cols["doculect"]]
+                    lang = self.languages[doculect]
+                    yield lang.family, genus, doculect, row[self.cols["tokens"]]
 
 
 def register(parser):
@@ -467,12 +495,7 @@ def register(parser):
         action='store',
         default=None,
         help='select a display')
-    parser.add_argument(
-        '--threshold',
-        action='store',
-        default=1,
-        type=float,
-        help='Max differences per syllable in the SCA string.')
+
     parser.add_argument(
         '--cutoff',
         action='store',
@@ -486,26 +509,20 @@ def register(parser):
         default='BIPA',
         type=str,
         help='select a sound class model: BIPA or Coarse.')
-
-    parser.add_argument(
-        '--alignment',
-        choices=["sca", "simple"],
-        default='simple',
-        type=str,
-        help='select an alignment method: either of SCA or a simple scorer '
-             'which penalizes C/V matches and forbids T/C & T/V matches.')
+    #
+    # parser.add_argument(
+    #     '--alignment',
+    #     choices=["sca", "simple"],
+    #     default='simple',
+    #     type=str,
+    #     help='select an alignment method: either of SCA or a simple scorer '
+    #          'which penalizes C/V matches and forbids T/C & T/V matches.')
     parser.add_argument(
         '--cognate_eval',
         action='store_true',
         default=False,
         help='Evaluate cognate detection.')
 
-    parser.add_argument(
-        '--bdpa',
-        action='store',
-        default=None,
-        type=str,
-        help='path to BDPA gold alignments, for evaluation (psa file)')
     parser.add_argument(
         '--concepts',
         action='store',
@@ -521,7 +538,6 @@ class Correspondences(object):
         args: the full args passed to the correspondences command.
         data (SoundCorrespsByGenera): the lexicore dataset
         clts (pyclts.CLTS): a clts instance
-        sca_cache (dict): maps bipa sounds to SCA class (used for the cognate threshold).
         bipa_cache (dict): maps strings to bipa sounds.
         counts (Counter): occurences of pairs of Sounds (the keys are frozensets).
         examples (defaultdict): example source words for pairs of sounds (the keys are frozensets).
@@ -532,7 +548,7 @@ class Correspondences(object):
         eval_cognates (bool): whether to evaluate cognacy detection.
     """
 
-    def __init__(self, args, data, clts, align_method, features_func=None, eval_cognates=False):
+    def __init__(self, args, data, clts, features_func=None, eval_cognates=False):
         """ Initialization only records the arguments and defines the attributes.
 
         Args:
@@ -555,16 +571,7 @@ class Correspondences(object):
         self.cognates_pairs_by_datasets = Counter()
         self.get_features = features_func
         self.score_cache = {}
-        self.cognate_detection = Counter()
-        self.cognate_eval = eval_cognates
-        self.cognate_confusion_matrix = [#T  F (predicted)
-                                         [0, 0],# T gold
-                                         [0, 0] # F gold
-                                        ]
-        if align_method == "sca":
-            self.align = self.align_sca
-        elif align_method == "simple":
-            self.align = self.align_simple
+        self.eval_cognates = eval_cognates
 
     def bipa(self, item):
         """ Caches calls to the bipa transcription system, as resolve_sound is too slow.
@@ -580,20 +587,6 @@ class Correspondences(object):
         except KeyError:
             self.bipa_cache[item] = self.clts.bipa[item]
             return self.bipa_cache[item]
-
-    def sca(self, item):
-        """ Caches calls to the SCA sound class system, as resolve_sound is too slow.
-        Args:
-            item: a string representing a sound
-
-        Returns:
-            sca (str): the corresponding SCA class
-        """
-        try:
-            return self.sca_cache[item]
-        except KeyError:
-            self.sca_cache[item] = self.clts.soundclasses_dict["sca"][item]
-            return self.sca_cache[item]
 
     def find_available(self):
         """ Find which pairs of sounds from our data are available in each genera.
@@ -613,11 +606,10 @@ class Correspondences(object):
         self.args.log.info('Counting available corresp...')
 
         sounds_by_genera = defaultdict(lambda: defaultdict(Counter))
-        for word in self.data:
-            for sound in word.token:
+        for family, genus, lang, tokens in self.data:
+            for sound in tokens:
                 if sound not in IGNORE:  # spaces and segmentation symbols ignored
-                    sounds_by_genera[(word.lang.family, word.lang.genus)][sound][
-                        word.lang] += 1
+                    sounds_by_genera[(family, genus)][sound][lang] += 1
 
         available = list()
         for family, genus in list(sounds_by_genera):
@@ -642,19 +634,6 @@ class Correspondences(object):
                     available.append([family, genus, sound_A, sound_B])
 
         return available
-
-    def allowed_differences(self, sa, sb):
-        """ Compute the number of allowed differences for two syllable length.
-
-        Args:
-            sa (int): number of syllables in the first token
-            sb (int): number of syllables in the second token
-
-        Returns:
-            diff (int): a threshold above which two words of these lengths
-                can be considered cognates.
-        """
-        return max(sa, sb) * self.args.threshold
 
     def sounds_and_contexts(self, almA, almB):
         """ Iterator of sounds and contexts for a pair of aligned tokens.
@@ -701,271 +680,54 @@ class Correspondences(object):
             prevB = prevB if catsB[i] is None else catsB[i]
             yield (sA, cA), (sB, cB)
 
-    def score(self, a, b):
-
-        try:
-            return self.score_cache[(a,b)]
-        except KeyError:
-            if a == b :
-                self.score_cache[(a,b)] = 1
-                self.score_cache[(b,a)] = 1
-                return 1
-            a_cat = self.tones.isdisjoint(a)
-            b_cat = self.tones.isdisjoint(b)
-            if a_cat != b_cat:
-                self.score_cache[(a,b)] = -10
-                self.score_cache[(b,a)] = -10
-                return -10
-
-            if self.get_features is None:  # no features, mismatch default
-                ba = self.bipa(a)
-                bb = self.bipa(b)
-                if ba.type != bb.type:
-                    self.score_cache[(a,b)] = -1.5
-                    self.score_cache[(b,a)] = -1.5
-                    return -1.5
-
-                self.score_cache[(a,b)] = -1
-                self.score_cache[(b,a)] = -1
-                return -1
-
-            else:  # mismatch according to similarity
-                fa = self.get_features(a)
-                fb = self.get_features(b)
-                if type(fa) == tuple:
-                    if type(fb) == tuple:
-                        # For two complex sounds, compare together first and second elements
-                        common = len(fa[0] & fb[0]) + len(fa[1] & fb[1])
-                        total = len(fa[0] | fb[0]) + len(fa[1] | fb[1])
-                    else:
-                        # Complex sound & simple: anything in common with
-                        # the first or second part of the complex sound is taken into account
-                        common = len((fa[0] & fb)  | (fa[1] & fb))
-                        total = len(fa[0] | fb | fa[1])
-                elif type(fb) == tuple:
-                    # Complex sound & simple: anything in common with
-                    # the first or second part of the complex sound is taken into account
-                    common = len((fa & fb[0]) |(fa & fb[1]))
-                    total = len(fa | fb[0] | fb[1])
-                else:
-                    # Two simple sounds: simple jaccard index
-                    common = len(fa & fb)
-                    total = len(fa | fb)
-
-                sim = common / total
-                # Over .5 similarity will result in positive scores. Under, will result in negative scores.
-                score = sim-0.5
-                self.score_cache[(a,b)] = score
-                self.score_cache[(b,a)] = score
-                return score
-
-    def get_scorer(self, seqA, seqB):
-        """ Returns an alignment scorer which penalizes tone alignments with non tones.
-
-        The alignment scorer is a dict of a pair of sounds (a,b) to a score, for all pairs
-        of sounds across the two sequences.
-
-        Here, we set :
-
-        - 1 for a match,
-        - -10 for mismatches involving a tone and something that is not a tone,
-
-        If we don't have access to features:
-        - -1.5 for other cross-category mismatches
-        - -1 for in-category mismatches and indels
-
-        The reason to penalize tones is that having tones in the sequence of sounds is
-        only a notational trick, as they actually belong to a different tier.
-        The reason to prefer in-category matches is to favor alignments of type CV/-V
-        rather than CV/V-.
-
-        If we have access to features: the featural similarity between sounds.
-
-        For reference, the default lingpy scorer is:
-        >>> {(a, b): 1.0 if a == b else -1.0 for a, b in product(seqA, seqB)}
-
-        Args:
-            seqA (iterable of str): first sequence
-            seqB (iterable of str): second sequence
-
-        Returns:
-            scorer (dict): maps from pairs of sounds to score.
-        """
-
-
-        return {(a, b): self.score(a, b) for a, b in product(seqA, seqB)}
-
-    def are_cognate(self, wordA, wordB):
-        """ Test if two words are cognates.
-
-        If we have gold cognate identifier information, we simply use it.
-        Otherwise, we assume tokens are cognates if they are similar enough.
-        The similarity threshold is proportional to the number of syllables.
-        The distance is an edit distance over SCA strings.
-        This allows any changes insides SCA's classes for free,
-        that is, historically expected changes are not penalized.
-
-        TODO:
-            - Add option to swap this out for other methods.
-             Using a method which considers whole lists will require refactoring of
-             SoundCorrespsByGenera.
-            - Align partial cognates separately.
-
-        Args:
-            wordA (Word): the first word
-            wordB (Word): the second word
-
-        Returns:
-            cognacy (bool): whether the two words should be considered cognates.
-        """
-        def below_threshold(wordA, wordB):
-            # Identical words are cognate
-            tokA, tokB = wordA.token, wordB.token
-            if tokA == tokB:
-                return True
-
-            # Identical sequences of sound classes are cognates
-            tokA = [self.sca(s) for s in tokA]
-            tokB = [self.sca(s) for s in tokB]
-            if tokA == tokB:
-                return True
-
-            # Use a threshold on sequence similarity
-            allowed = self.allowed_differences(wordA.syllables, wordB.syllables)
-
-            # Estimate a lower boundary by checking character sets.
-            # If A has n more characters than B, and B m more,
-            # and m > n, then we need at least m edits
-            # (n substitutions, and m-n insertions)
-            # Of course, it is likely to be more, but this is enough to
-            # decide cases where tokens are very different
-            sa, sb = set(tokA), set(tokB)
-            lower_boundary = max(len(sa - sb), len(sb - sa))
-            if lower_boundary > allowed:
-                return False
-
-            # bottleneck
-            return lingpy.edit_dist(tokA, tokB) <= allowed
-
-        # In a single dataset with gold cognate IDs, rely on it
-        is_cognate = None
-        cognate_type = None
-        if wordA.dataset == wordB.dataset and wordA.cognate_id is not None or wordB.cognate_id is not None:
-            is_cognate = wordA.cognate_id == wordB.cognate_id
-            if is_cognate:
-                cognate_type = "Gold cognates"
-            else:
-                cognate_type = "Gold non cognates"
-
-        if is_cognate is None or self.cognate_eval:
-            cognate_guess = below_threshold(wordA, wordB)
-
-            if is_cognate is None:
-                cognate_type = "detected cognates" if cognate_guess else "rejected cognates"
-            else:
-                # record evaluation info
-                i, j = int(not is_cognate), int(not cognate_guess)
-                self.cognate_confusion_matrix[i][j] += 1
-
-        self.cognate_detection[cognate_type] += 1
-
-        if is_cognate is None:
-            return cognate_guess
-
-        return is_cognate
-
-    def align_simple(self, a, b):
-        """ Perform the alignment using a simple method and custom scorer."""
-        return lingpy.nw_align(a, b, self.get_scorer(a, b))
-
-    def align_sca(self, a, b):
-        """ Perform the alignment using SCA from lingpy."""
-        if a == b:
-            return a, b, 0
-        p = lingpy.Pairwise(a, b)
-        p.align(model="sca")
-        return p.alignments[0]
-
+    #
     def find_attested_corresps(self):
         """ Find all correspondences attested in our data.
 
-        - Inside each genus, we consider all pairs of tokens for the same concept across two
-        languages.
-        - We apply a simple cognacy test and align cognate pairs using our custom scorer.
-        - We record a correspondence for each aligned position, unless a sound is to be ignored.
+            We record a correspondence for each aligned position, unless a sound is to be ignored.
 
-        We do not use a better cognate recognition method or cognate alignment function,
-        as these tend to insert too much knowledge, which we then find back identical in
-        correspondences.
-
-        This functions returns None, but changes `self.corresps` in place.
+            This functions returns None, but changes `self.corresps` in place.
         """
         self.args.log.info('Counting attested corresp...')
         exs_counts = Counter()
-        for wordA, wordB in self.data.iter_candidates():
-            if self.are_cognate(wordA, wordB):
-                self.total_cognates[(wordA.lang, wordB.lang)] += 1
+        for words, aligned in self.data.find_cognates(eval=self.eval_cognates):
+            l = len(words)
+
+            # convert to pairwise
+            for i, j in combinations(range(l), 2):
+                wordA = words[i]
+                wordB = words[j]
+
+                # Increment total cognates per pair of languages
+                langs = (self.data.languages[wordA["doculect"]],
+                         self.data.languages[wordB["doculect"]])
+
+                # ignore pairs across synonyms
+                if langs[0] == langs[1]: continue
+
+                self.total_cognates[langs] += 1
 
                 # Record that we found a cognate pair for these datasets
-                datasets = tuple(sorted((wordA.dataset,wordB.dataset)))
-                self.cognates_pairs_by_datasets[datasets] += 1
+                datasetA, datasetB = (wordA["cldf_dataset"], wordB["cldf_dataset"])
+                self.cognates_pairs_by_datasets[tuple(sorted((datasetA, datasetB)))] += 1
 
-                almA, almB, sim = self.align(wordA.token, wordB.token)
+                almA = aligned[i]
+                almB = aligned[j]
                 for (soundA, ctxtA), (soundB, ctxtB) in self.sounds_and_contexts(almA,
                                                                                  almB):
-                    if IGNORE.isdisjoint({soundA, soundB}):
-                        A = Sound(lang=wordA.lang, sound=soundA, context=ctxtA)
-                        B = Sound(lang=wordB.lang, sound=soundB, context=ctxtB)
-                        event = frozenset({A, B})
-                        self.counts[event] += 1
-                        event_in_dataset = frozenset({A, wordA.dataset,
-                                                      B, wordB.dataset})
-                        if len(self.examples[event]) < 5 and \
-                                exs_counts[event_in_dataset] < 2:
-                            exs_counts[event_in_dataset] += 1
-                            self.examples[event].append((wordA, wordB))
+                    if not IGNORE.isdisjoint({soundA, soundB}):
+                        continue
 
-    def evaluate_alignment(self, path, sound_model, filename):
-
-        # specific settings to maximise compatibility
-
-        # If we keep this to "True", sequences are re-tokenised when calling PSA
-        # as the gold sequences are already merged
-        lingpy.settings.rcParams["merge_vowels"] = True
-
-        # This allows to keep sequences with sounds unknown from CLTS.
-        # We just won't coarsen them.
-        sound_model.silent_errors = True
-
-        gold = lingpy.PSA(path) # used for evaluation
-        pred = lingpy.PSA(path) # alignments will be replaced by our method
-        lingpy.settings.rcParams["merge_vowels"] = False
-
-        for i, (seqA, seqB) in enumerate(pred.tokens):
-            # Replace sequences with coarsened sequences
-            seqA = [sound_model[s] for s in seqA]
-            seqB = [sound_model[s] for s in seqB]
-            gold.tokens[i] = (seqA, seqB)
-            pred.tokens[i] = (seqA, seqB)
-
-            # Replace gold data with coarsened sequences
-            goldA, goldB, goldSim = gold.alignments[i]
-            goldA = [s if s =="-" else sound_model[s] for s in goldA]
-            goldB = [s if s =="-" else sound_model[s] for s in goldB]
-            gold.alignments[i] = goldA, goldB, goldSim
-
-            # Perform alignment on coarse sequences
-            pred.alignments[i] = self.align(seqA, seqB)
-
-        eval = lingpy.evaluate.apa.EvalPSA(gold, pred)
-        scores = {"Column score (BDPA)":eval.c_score(),
-                  "Sum of pair score (BDPA)": eval.sp_score(),
-                  "Jaccard score (BDPA)": eval.jc_score(),
-                  "Percentage of identical rows (BDPA)": eval.r_score(),
-                  }
-        eval.diff(filename=filename)
-        sound_model.silent_errors = False
-        return scores
+                    A = Sound(lang=langs[0], sound=soundA, context=ctxtA)
+                    B = Sound(lang=langs[1], sound=soundB, context=ctxtB)
+                    event = frozenset({A, B})
+                    self.counts[event] += 1
+                    event_in_dataset = frozenset({A, datasetA,
+                                                  B, datasetB})
+                    if len(self.examples[event]) < 5 and \
+                            exs_counts[event_in_dataset] < 2:
+                        exs_counts[event_in_dataset] += 1
+                        self.examples[event].append((wordA, wordB))
 
 
 def run(args):
@@ -973,7 +735,7 @@ def run(args):
 
     Run with:
 
-        cldfbench lexitools.correspondences --clts-version v1.4.1 --model Coarse --cutoff 0.05 --threshold 1 --dataset lexicore
+        cldfbench lexitools.correspondences --clts-version v1.4.1 --model Coarse --cutoff 0.05 --dataset lexicore
 
     For details on the arguments, see `cldfbench lexitools.correspondences --help`.
 
@@ -1013,6 +775,7 @@ def run(args):
     if args.model == "BIPA":
         def to_sound_class(sound):
             return str(clts.bipa[sound])
+
         def sound_features(sound):
             return clts.bipa[sound].featureset
 
@@ -1021,6 +784,7 @@ def run(args):
 
         def to_sound_class(sound):
             return coarse[sound]
+
         def sound_features(sound):
             return coarse.features.get(sound, {})
     else:
@@ -1038,40 +802,29 @@ def run(args):
 
     args.log.info(
         'Loaded the wordlist ({} languages, {} genera, {} concepts kept)'.format(
-            len(data.lang_to_concept),
-            len(data.genera_to_lang),
+            len(data.languages),
+            len(data._data),
             len(data.concepts_subset)))
 
     corresp_finder = Correspondences(args, data, clts,
                                      features_func=sound_features,
-                                     align_method=args.alignment,
                                      eval_cognates=args.cognate_eval)
-
-    align_eval = {}
-    if args.model == "Coarse" and args.bdpa is not None:
-        align_eval = corresp_finder.evaluate_alignment(args.bdpa,
-                                      coarse,
-                                      output_prefix + '_alignment_eval.diff')
 
     available = corresp_finder.find_available()
 
     # with cProfile.Profile() as pr:
-    # TODO: if this needs to be much more memory efficient,
-    # we can work genus-per-genus, write to file as we work,
-    # and clear memory after each genus. For now it does not seem
-    # necessary.
     corresp_finder.find_attested_corresps()
 
     # pr.dump_stats("profile.prof")
 
     def format_ex(rows):
         r1, r2 = rows
-        tok1 = " ".join(r1.token)
-        tok2 = " ".join(r2.token)
-        template = "{word} ([{original_token}] {dataset} {id})"
+        tok1 = " ".join(r1["tokens"])
+        tok2 = " ".join(r2["tokens"])
+        template = "{word} ([{original_token}] {cldf_dataset} {original_id})"
 
-        return template.format(word=tok1, **asdict(r1)) + "/" + \
-               template.format(word=tok2, **asdict(r2))
+        return template.format(word=tok1, **r1) + "/" + \
+               template.format(word=tok2, **r2)
 
     with open(output_prefix + '_coarsening.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
@@ -1079,8 +832,8 @@ def run(args):
 
     with open(output_prefix + '_counts.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["Family", "Genus", "Lang A", "Lang B", "Sound A",
-                         "Sound B", "Env A", "Env B", "Count", "Examples"])
+        writer.writerow(["family", "genus", "lang_a", "lang_b", "sound_a",
+                         "sound_b", "env_a", "env_b", "count", "examples"])
         for sounds in corresp_finder.counts:
             # ensure to always have the same order.
             A, B = sorted(sounds, key=lambda s: (s.sound, s.context))
@@ -1093,14 +846,14 @@ def run(args):
                                  A.lang.glottocode, B.lang.glottocode,
                                  A.sound, B.sound, A.context, B.context, count, examples])
 
-
     pairs_in_dataset = 0
     pairs_across_datasets = 0
-    with open(output_prefix + '_pairs_count_by_datasets.csv', 'w', encoding="utf-8") as csvfile:
+    with open(output_prefix + '_pairs_count_by_datasets.csv', 'w',
+              encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["DatasetA", "DatasetB", "Number_of_cognate_pairs"])
+        writer.writerow(["dataset_a", "dataset_b", "number_of_cognate_pairs"])
         for (dA, dB) in corresp_finder.cognates_pairs_by_datasets:
-            count =corresp_finder.cognates_pairs_by_datasets[(dA, dB)]
+            count = corresp_finder.cognates_pairs_by_datasets[(dA, dB)]
             writer.writerow([dA, dB, count])
             if dA == dB:
                 pairs_in_dataset += count
@@ -1109,53 +862,38 @@ def run(args):
 
     with open(output_prefix + '_available.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["Family", "Genus", "Sound A", "Sound B"])
+        writer.writerow(["family", "genus", "sound_a", "sound_B"])
         writer.writerows(available)
 
     with open(output_prefix + '_concepts_intersection.csv', 'w',
               encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["Lang A", "Lang B", "Common concepts", "Kept concepts"])
+        writer.writerow(["lang_a", "lang_b", "common_concepts", "kept_concepts"])
         for lA, lB in data.concepts_intersection:
             concepts = data.concepts_intersection[(lA, lB)]
             kept = corresp_finder.total_cognates[(lA, lB)]
             writer.writerow([lA.glottocode, lB.glottocode, concepts, kept])
 
-
-    with open(output_prefix + '_alignment_scores.csv', 'w',
-              encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["A", "B", "score", "A feat", "B feat"])
-        for a,b in corresp_finder.score_cache:
-            writer.writerow([a, b, corresp_finder.score_cache[(a,b)],
-                             sound_features(a), sound_features(b)])
-
     metadata_dict = {"observation cutoff": args.cutoff,
-                     "similarity threshold": args.threshold,
                      "model": args.model,
                      "concepts": args.concepts,
                      "dataset": args.dataset}
-    metadata_dict.update(align_eval)
     dataset_str = sorted(a + "/" + b for a, b in dataset_list)
     metadata_dict["dataset_list"] = dataset_str
-    metadata_dict["n_languages"] = len(data.lang_to_concept)
+    # metadata_dict["n_languages"] = len(data.lang_to_concept)
     metadata_dict["n_genera"] = len(data.genera_to_lang)
     metadata_dict["n_concepts"] = len(data.concepts_subset)
-    metadata_dict["n_tokens"] = len(data.data)
+    metadata_dict["n_tokens"] = len(data._data)
     metadata_dict["n_cognate_pairs_across_datasets"] = pairs_across_datasets
     metadata_dict["n_cognate_pairs_in_datasets"] = pairs_in_dataset
-    metadata_dict["threshold_method"] = "normalized per syllable"
     metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
-    metadata_dict["alignment_method"] = args.alignment
-    metadata_dict["gold_cognates_found"] = corresp_finder.cognate_detection["Gold cognates"]
-    metadata_dict["gold_non_cognates"] = corresp_finder.cognate_detection["Gold non cognates"]
-    metadata_dict["detected_cognates"] = corresp_finder.cognate_detection["detected cognates"]
-    metadata_dict["rejected_word_pairs"] = corresp_finder.cognate_detection["rejected cognates"]
-    if args.cognate_eval:
-        metadata_dict["cognate_eval_TP"] = corresp_finder.cognate_confusion_matrix[0][0]
-        metadata_dict["cognate_eval_FP"] = corresp_finder.cognate_confusion_matrix[1][0]
-        metadata_dict["cognate_eval_FN"] = corresp_finder.cognate_confusion_matrix[0][1]
-        metadata_dict["cognate_eval_TN"] = corresp_finder.cognate_confusion_matrix[1][1]
+
+    # TODO: update cognate eval
+    for dataset in corresp_finder.data.evals:
+        p, r, f = corresp_finder.data.evals[dataset]
+        metadata_dict["eval_{}_precision".format(dataset)] = p
+        metadata_dict["eval_{}_recall".format(dataset)] = r
+        metadata_dict["eval_{}_fscore".format(dataset)] = f
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:

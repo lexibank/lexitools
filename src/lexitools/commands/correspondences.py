@@ -65,7 +65,25 @@ LEXICORE = [('lexibank', 'aaleykusunda'), ('lexibank', 'abrahammonpa'),
             ('lexibank', 'walkerarawakan'), ('lexibank', 'walworthpolynesian'),
             ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
             ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
-            ('sequencecomparison', 'zhivlovobugrian')
+            ('sequencecomparison', 'zhivlovobugrian'),
+            ('lexibank', 'backstromnorthernpakistan'),
+             ('lexibank', 'baf2'),
+             ('lexibank', 'clarkkimmun'),
+             ('lexibank', 'housinitic'),
+             ('lexibank', 'hsiuhmongmien'),
+             ('lexibank', 'lamayi'),
+             ('lexibank', 'liusinitic'),
+             ('lexibank', 'mortensentangkhulic'),
+             ('lexibank', 'polyglottaafricana'),
+             ('lexibank', 'simsrma'),
+             ('lexibank', 'starostinhmongmien'),
+             ('lexibank', 'starostinkaren'),
+             ('lexibank', 'tppsr'),
+             ('lexibank', 'vanbikkukichin'),
+             ('lexibank', 'wangbai'),
+             ('lexibank', 'wheelerutoaztecan'),
+             ('lexibank', 'wichmannmixezoquean'),
+             ('sequencecomparison', 'listsamplesize')
             ]
 
 # set of characters which should be ignored in tokens (markers, etc)
@@ -242,8 +260,6 @@ class SoundCorrespsByGenera(object):
         genera_to_lang (defaultdict): a mapping of each genus to Lang objects.
             Genera are loaded from Tiago Tresoldi's langgenera.
         errors (list of list): table which summarizes errors encountered in tokens.
-        asjp (bool): whether the only dataset is ASJP, in which case we will extract
-            Graphemes rather than Segments.
         concepts_intersection (Counter): Counts the number of distinct concepts kept
             for each pair of languages encountered in a genera.
         concepts_subset (set): the set of all concepts which will be kept.
@@ -255,7 +271,7 @@ class SoundCorrespsByGenera(object):
     """
 
     def __init__(self, db, langgenera_path, concept_list=None,
-                 sound_class=None, glottolog=None, asjp=False):
+                 sound_class=None, glottolog=None):
         """ Initialize the data by collecting, processing and organizing tokens.
 
         Iterates over the database, to:
@@ -271,8 +287,6 @@ class SoundCorrespsByGenera(object):
             sound_class (func): a function which associates a class of sounds to any BIPA
             sound string.
             glottolog (pyglottolog.Glottolog): Glottolog instance to retrieve family names.
-            asjp (bool): whether the only dataset is ASJP, in which case we will extract
-            Graphemes rather than Segments.
         """
         self.sound_class = sound_class
 
@@ -285,24 +299,9 @@ class SoundCorrespsByGenera(object):
         langs = {}
         # this is less slow than calling .langoid(code) for each code
         langoids = glottolog.languoids_by_code()
-        self.genera_to_lang = defaultdict(set)
         self.errors = [["Dataset", "Language_ID", "Sound", "Token", "ID"]]
-        self.asjp = asjp
         self.concepts_intersection = Counter()
-
-        for row in progressbar(db.iter_table("LanguageTable"), desc="listing languages"):
-            gcode = row["Glottocode"]
-            if gcode is None or gcode not in lang_to_genera:
-                continue
-            genus = lang_to_genera[gcode]
-            family = row["Family"]
-            langoid = langoids.get(gcode, None)
-            if langoid is not None and langoid.family is not None:
-                family = langoid.family.name
-
-            lang = Lang(genus=genus, family=family, glottocode=gcode, name=langoid.name)
-            self.genera_to_lang[genus].add(lang)
-            langs[row["ID"]] = lang
+        self.populate_genera_to_lang(db, lang_to_genera, langoids, langs)
 
         concepts = {row["ID"]: row["Concepticon_ID"] for row in
                     db.iter_table('ParameterTable')}
@@ -322,13 +321,13 @@ class SoundCorrespsByGenera(object):
         for row in progressbar(db.iter_table('FormTable'),
                                desc="Loading data..."):
 
-            if row.get("Loan", ""): continue  # Ignore loan words
+            # Ignore loan words
+            if row.get("Loan", ""): continue
 
             concept = concepts[row["Parameter_ID"]]
             if concept not in self.concepts_subset or \
                     row["Language_ID"] not in langs or \
-                    (not self.asjp and row["Segments"] is None) or \
-                    (self.asjp and row["Graphemes"] is None):
+                    row["Segments"] is None:
                 continue
 
             # TODO: if it has COGIDS, split on morphemes
@@ -358,11 +357,26 @@ class SoundCorrespsByGenera(object):
             self.data[(lang, concept)][" ".join(token)].append(word)
             self.lang_to_concept[lang].add(concept)
 
+    def populate_genera_to_lang(self, db, lang_to_genera, langoids, langs):
+        self.genera_to_lang = defaultdict(set)
+        for row in progressbar(db.iter_table("LanguageTable"), desc="listing languages"):
+            gcode = row["Glottocode"]
+            if gcode is None or gcode not in lang_to_genera:
+                continue
+            genus = lang_to_genera[gcode]
+            family = row["Family"]
+            langoid = langoids.get(gcode, None)
+            if langoid is not None and langoid.family is not None:
+                family = langoid.family.name
+
+            lang = Lang(genus=genus, family=family, glottocode=gcode, name=langoid.name)
+            self.genera_to_lang[genus].add(lang)
+            langs[row["ID"]] = lang
+
     def _iter_phonemes(self, row):
         """ Iterate over pre-processed phonemes from a row's token.
 
-        The phonemes are usually from the "Segments" column, except for ASJP data
-        where we retrieve them from "Graphemes".
+        The phonemes are taken from the "Segments" column
 
         We pre-process by:
             - re-tokenizing on spaces, ignoring empty segments
@@ -375,14 +389,10 @@ class SoundCorrespsByGenera(object):
         Yields:
             successive sound classes in the row's word.
         """
+        segments = row["Segments"]
         # In some dataset, the separator defined in the metadata is " + ",
         # which means that tokens are not phonemes (ex:bodtkhobwa)
         # This is solved by re-tokenizing on the space...
-        if self.asjp:
-            segments = row["Graphemes"][1:-1]  # Ignore end and start symbols
-        else:
-            segments = row["Segments"]
-
         tokens = " ".join([s for s in segments if (s is not None and s != "")]).split(" ")
         for segment in tokens:
             try:
@@ -428,11 +438,11 @@ class SoundCorrespsByGenera(object):
                         wordB = self.data[(langB, concept)][tokB][0]
                         yield wordA, wordB
 
-    def __iter__(self):
-        """Iterate over the tokens.
+    def __iter__(self): # TODO: maintain the possibility of iterating over tokens
+        """Iterate over all Words in the datasets.
 
         Yields:
-            for all known tokens, its genus, language glottocode, concept, and the token itself.
+            all known Word instances in the dataset (ignore synonyms).
         """
         for lang, concept in self.data:
             for token in self.data[(lang, concept)]:
@@ -472,10 +482,10 @@ def register(parser):
 
     parser.add_argument(
         '--model',
-        choices=["BIPA", "ASJPcode", "Coarse"],
+        choices=["BIPA", "Coarse"],
         default='BIPA',
         type=str,
-        help='select a sound class model: BIPA, ASJPcode, or Coarse.')
+        help='select a sound class model: BIPA or Coarse.')
 
     parser.add_argument(
         '--alignment',
@@ -997,12 +1007,9 @@ def run(args):
     output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
 
     """Three options for sound classes:
-    
     1. Keep original BIPA symbols. Very precise, but variations in annotation make the results noisy.
-    2. ASJP. Only possible with the lexibank/asjp dataset, as we don't have any BIPA->ASJPcode converter.
-    3. Coarsen BIPA to keep only some main features. This tries to strike a balance between BIPA and avoiding noise.
+    2. Coarsen BIPA to keep only some main features. This tries to strike a balance between BIPA and avoiding noise.
     """
-    full_asjp = False
     if args.model == "BIPA":
         def to_sound_class(sound):
             return str(clts.bipa[sound])
@@ -1016,16 +1023,6 @@ def run(args):
             return coarse[sound]
         def sound_features(sound):
             return coarse.features.get(sound, {})
-
-    elif args.model == "ASJPcode":
-        if args.dataset != "lexibank/asjp":
-            raise ValueError("ASJPcode only possible with lexibank/asjp")
-        full_asjp = True
-
-        def to_sound_class(sound):
-            return sound  # we will grab the graphemes column
-
-        sound_features = None
     else:
         raise ValueError("Incorrect sound class model")
 
@@ -1037,8 +1034,7 @@ def run(args):
                                  sound_class=to_sound_class,
                                  concept_list=args.concepts,
                                  glottolog=pyglottolog.Glottolog(
-                                     args.glottolog.dir),
-                                 asjp=full_asjp)
+                                     args.glottolog.dir))
 
     args.log.info(
         'Loaded the wordlist ({} languages, {} genera, {} concepts kept)'.format(

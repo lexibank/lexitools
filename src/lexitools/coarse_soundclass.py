@@ -139,27 +139,35 @@ class Coarsen(object):
 
     def _category(self, sound):
         s = self[sound]
-        feats = dict(self.features[s])
-        cat = feats["category"]
+        feats = self.features[s]
+
+        if type(feats) is tuple:
+            feats = feats[0] | feats[1]
+
+        # markers
+        if ("category", "marker") in feats:
+            self.categories[sound] = dict(feats)["marker"]
+            return self.categories[sound]
 
         # tones
-        if cat == "tone":
-            return cat
+        if ("category", "tone") in feats:
+            self.categories[sound] = "T"
+            return self.categories[sound]
 
         # vowels
-        if cat in {"vowel", "diphthong"}:
+        if ("category", "vowel") in feats or ("category", "diphthong") in feats:
             self.categories[sound] = "V"
             return self.categories[sound]
 
         # nasals
-        if feats["manner"] == "nasal":
+        if ("manner", "nasal") in feats:
             self.categories[sound] = "N"
             return self.categories[sound]
 
         # liquids
-        elif feats["manner"] == "vibrant" \
-                or "lateral" in feats["manner"] \
-            or {"manner":"approximant", "place":"anterior"} < feats:
+        manner = dict(feats)["manner"]
+        if manner == "vibrant" or "lateral" in manner \
+            or {("manner","approximant"), ("place","anterior")} < feats:
             self.categories[sound] = "L"
             return self.categories[sound]
 
@@ -374,11 +382,12 @@ class Coarsen(object):
         for bipa in self.cache:
             coarse = self.cache[bipa]
             reversed_cache[coarse].append(bipa)
-        rows = [["BIPA", "Coarse", "Coarse features"]]
+        rows = [["BIPA", "Coarse", "Category", "Coarse features"]]
         for fs in self.labels:
             coarse = self.labels[fs]
             all_bipa = reversed_cache[coarse]
             if type(fs) is not tuple:
                 rows.append(
-                    [" ".join(all_bipa), coarse, " ".join(sorted(f + "=" + v for f, v in fs))])
+                    [" ".join(all_bipa), coarse, self.category(coarse),
+                     " ".join(sorted(f + "=" + v for f, v in fs))])
         return rows

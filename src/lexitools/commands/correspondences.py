@@ -35,11 +35,12 @@ lingpy.settings.rcParams["merge_vowels"] = False
 # import cProfile
 
 LEXICORE = [
-    # ('lexibank', 'aaleykusunda'),
-    # ('lexibank', 'abrahammonpa'),
-    # ('lexibank', 'allenbai'),
-    # ('lexibank', 'bdpa'),
-    # ('lexibank', 'beidasinitic'), ('lexibank', 'birchallchapacuran'),
+     # ('lexibank', 'aaleykusunda'),
+     # ('lexibank', 'abrahammonpa'),
+     ('lexibank', 'allenbai'),
+     # ('lexibank', 'bdpa'),
+    # ('lexibank', 'beidasinitic'),
+    ('lexibank', 'birchallchapacuran'),
     # ('sequencecomparison', 'blustaustronesian'),
     # ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
     # ('lexibank', 'cals'), ('lexibank', 'castrosui'),
@@ -239,10 +240,11 @@ class Sound(metaclass=FlyWeight):
         lang (Lang) : the language in which this sound was observed
         context (str) : the context in which this sound was observed
     """
-    __slots__ = ('sound', 'lang', 'context')
+    __slots__ = ('sound', 'lang', 'left_context', 'right_context')
     sound: str
     lang: Lang
-    context: str
+    left_context: str
+    right_context: str
 
 def wordlist_subset(lex, f):
     out = {}
@@ -371,7 +373,7 @@ class CognateFinder(object):
             langoid = langoids.get(gcode, None)
             if langoid is not None and langoid.family is not None:
                 family = langoid.family.name
-            languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=langoid.name)
+            languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=row["Name"]) #TODO: should we use the langoid name here ?
         return languages
 
     def __getitem__(self, args):
@@ -444,6 +446,7 @@ class CognateFinder(object):
                                  lingpy.evaluate.acd.bcubes(lex, gold='cogid',
                                  test='pred_cogid',pprint=False)))
                     d.update(self.sanity_stats(lex))
+                    d["lexstat_params"] = self.stats[family]["lexstat_params"]
                     self.evals[(family,dataset)] = d
 
     def _iter_phonemes(self, row):
@@ -496,12 +499,6 @@ def register(parser):
         default=None,
         help='select a display')
 
-    parser.add_argument(
-        '--cutoff',
-        action='store',
-        default=0.05,
-        type=float,
-        help='Cutoff for attested correspondences in a language pair, in proportion of the list of cognates.')
     #
     # parser.add_argument(
     #     '--alignment',
@@ -534,7 +531,6 @@ class Correspondences(object):
         bipa_cache (dict): maps strings to bipa sounds.
         counts (Counter): occurences of pairs of Sounds (the keys are frozensets).
         examples (defaultdict): example source words for pairs of sounds (the keys are frozensets).
-        total_cognates (Counter): counts the number of cognates found for each pair of languages.
         tones (set): characters which denote tones. Allow for a fast identification.
             (using calls to bipa is too slow)
         get_features (func): function to get sound features
@@ -555,53 +551,49 @@ class Correspondences(object):
         self.data = data
         self.counts = Counter()
         self.examples = defaultdict(list)
-        self.total_cognates = Counter()
         self.tones = set("⁰¹²³⁴⁵˥˦˧˨↓↑↗↘")
         self.cognates_pairs_by_datasets = Counter()
         self.score_cache = {}
         self.eval_cognates = eval_cognates
 
-    def sounds_and_contexts(self, almA, almB):
+    def add_contexts(self, seq):
         """ Iterator of sounds and contexts for a pair of aligned tokens.
 
         Args:
-            almA (list of str): aligned elements of the first token.
-            almB (list of str): aligned elements of the second token.
+            seq (list of str): sequence of segments or gap.
 
-        Yields: pair of aligned sounds and their contexts: `(sA, cA), (sB, cB)`
-            sA (str) and sB (str): aligned sounds from resp. almA and almB
-            cA (str) and cB (str): contexts for resp. sA and sB
+        Yields: pair of aligned sounds and their contexts: `(sound, context)`
         """
-
         def to_categories(sequence):
             """Turn a sequence of sounds into a sequence of categories used in contexts"""
             for s in sequence:
-                cat = self.data.coarsen.category(s)
-                if s == "-" or s in IGNORE or cat in {"tone"}:
+                if s == "-" or s in IGNORE:
                     yield None
-                yield cat
+                else:
+                    cat = self.data.coarsen.category(s)
+                    if cat in {"tone"}:
+                        yield None
+                    else:
+                        yield cat
             yield "#"
 
         def get_context(cats, i, sound, left):
             """Return the context for a given sound."""
             if cats[i] is None:  # No context for null "-" and tones
-                return sound
+                return '', ''
             else:
                 right = next((c for c in cats[i + 1:] if c is not None))
-                return left + sound + right
+                return left, right
 
-        catsA = list(to_categories(almA))
-        catsB = list(to_categories(almB))
-        l = len(almA)
-        prevA, prevB = "#", "#"
+        cats = list(to_categories(seq))
+        l = len(seq)
+        prev = "#"
         for i in range(l):
-            sA = almA[i]
-            cA = get_context(catsA, i, sA, prevA)
-            prevA = prevA if catsA[i] is None else catsA[i]
-            sB = almB[i]
-            cB = get_context(catsB, i, sB, prevB)
-            prevB = prevB if catsB[i] is None else catsB[i]
-            yield (sA, cA), (sB, cB)
+            s = seq[i]
+            l, r = get_context(cats, i, s, prev)
+            prev = prev if cats[i] is None else cats[i]
+
+            yield (s, (l, r))
 
     def find_attested_corresps(self):
         """ Find all correspondences attested in our data.
@@ -610,54 +602,46 @@ class Correspondences(object):
 
             This functions returns None, but changes `self.corresps` in place.
         """
+
+        def format_ex(r):
+            template = "{word} ([{original_token}] {cldf_dataset} {original_id})"
+            return template.format(word=" ".join(r["tokens"]), **r)
+
         self.args.log.info('Counting attested corresp...')
         exs_counts = Counter()
+
+        # self.counts[
         for words, aligned in self.data.find_cognates(eval=self.eval_cognates):
+
             l = len(words)
+            if l <= 1: continue
 
-            # convert to pairwise
-            for i, j in combinations(range(l), 2):
-                wordA = words[i]
-                wordB = words[j]
+            columns = list(zip(*[self.add_contexts(seq) for seq in aligned]))
+            langs = [self.data.languages[w["doculect"]] for w in words]
 
-                # Increment total cognates per pair of languages
-                langs = (self.data.languages[wordA["doculect"]],
-                         self.data.languages[wordB["doculect"]])
+            for sounds_and_contexts in columns:
+                sounds, contexts = zip(*sounds_and_contexts)
+                sounds = [Sound(lang=langs[i], sound=sounds[i],
+                                left_context=contexts[i][0], right_context=contexts[i][1])
+                               for i in range(l)]
+                event = tuple(sorted(sounds, key=lambda s:s.lang.glottocode))
+                self.counts[event] += 1
 
-                # ignore pairs across synonyms
-                if langs[0] == langs[1]: continue
+                event_in_dataset = frozenset({(sounds[i],words[i]["cldf_dataset"])
+                                              for i in range(l)})
 
-                self.total_cognates[langs] += 1
-
-                # Record that we found a cognate pair for these datasets
-                datasetA, datasetB = (wordA["cldf_dataset"], wordB["cldf_dataset"])
-                self.cognates_pairs_by_datasets[tuple(sorted((datasetA, datasetB)))] += 1
-
-                almA = aligned[i]
-                almB = aligned[j]
-                for (soundA, ctxtA), (soundB, ctxtB) in self.sounds_and_contexts(almA,
-                                                                                 almB):
-                    if not IGNORE.isdisjoint({soundA, soundB}):
-                        continue
-
-                    A = Sound(lang=langs[0], sound=soundA, context=ctxtA)
-                    B = Sound(lang=langs[1], sound=soundB, context=ctxtB)
-                    event = frozenset({A, B})
-                    self.counts[event] += 1
-                    event_in_dataset = frozenset({A, datasetA,
-                                                  B, datasetB})
-                    if len(self.examples[event]) < 5 and \
-                            exs_counts[event_in_dataset] < 2:
-                        exs_counts[event_in_dataset] += 1
-                        self.examples[event].append((wordA, wordB))
-
+                if len(self.examples[event]) < 5 and \
+                        exs_counts[event_in_dataset] < 2:
+                    exs_counts[event_in_dataset] += 1
+                    examples = [format_ex(w) for w in sorted(words, key=lambda w:w["glottocode"])]
+                    self.examples[event].append(examples)
 
 def run(args):
     """Run the correspondence command.
 
     Run with:
 
-        cldfbench lexitools.correspondences --clts-version v1.4.1 --model Coarse --cutoff 0.05 --dataset lexicore
+        cldfbench lexitools.correspondences --clts-version v1.4.1 --dataset lexicore
 
     For details on the arguments, see `cldfbench lexitools.correspondences --help`.
 
@@ -698,22 +682,13 @@ def run(args):
             len(data._data),
             len(data.concepts_subset)))
 
-    corresp_finder = Correspondences(args, data, clts,
-                                     eval_cognates=args.cognate_eval)
+    corresp_finder = Correspondences(args, data, eval_cognates=args.cognate_eval)
 
     # with cProfile.Profile() as pr:
     corresp_finder.find_attested_corresps()
 
     # pr.dump_stats("profile.prof")
 
-    def format_ex(rows):
-        r1, r2 = rows
-        tok1 = " ".join(r1["tokens"])
-        tok2 = " ".join(r2["tokens"])
-        template = "{word} ([{original_token}] {cldf_dataset} {original_id})"
-
-        return template.format(word=tok1, **r1) + "/" + \
-               template.format(word=tok2, **r2)
 
     with open(output_prefix + '_coarsening.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
@@ -721,33 +696,26 @@ def run(args):
 
     with open(output_prefix + '_counts.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["family", "lang_a", "lang_b", "sound_a",
-                         "sound_b", "env_a", "env_b", "count", "examples"])
-        for sounds in corresp_finder.counts:
-            # ensure to always have the same order.
-            A, B = sorted(sounds, key=lambda s: (s.sound, s.context))
+        writer.writerow(["family", "col_id",  "count",  "left_context","sound","right_context",
+                         "language", "glottocode", "examples"])
+        for i, sounds in enumerate(corresp_finder.counts):
+            col_id = sounds[0].lang.family+"-"+str(i)
             count = corresp_finder.counts[sounds]
-            total = corresp_finder.total_cognates[(A.lang, B.lang)]
-            if count > max(2, args.cutoff * total):
-                examples = [format_ex(rows) for rows in corresp_finder.examples[sounds]]
-                examples = "; ".join(examples)
-                writer.writerow([A.lang.family,
-                                 A.lang.glottocode, B.lang.glottocode,
-                                 A.sound, B.sound, A.context, B.context, count, examples])
+            examples = corresp_finder.examples[sounds]
 
-    pairs_in_dataset = 0
-    pairs_across_datasets = 0
-    with open(output_prefix + '_pairs_count_by_datasets.csv', 'w',
-              encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["dataset_a", "dataset_b", "number_of_cognate_pairs"])
-        for (dA, dB) in corresp_finder.cognates_pairs_by_datasets:
-            count = corresp_finder.cognates_pairs_by_datasets[(dA, dB)]
-            writer.writerow([dA, dB, count])
-            if dA == dB:
-                pairs_in_dataset += count
-            else:
-                pairs_across_datasets += count
+            for j, sound in enumerate(sounds):
+                lang = sound.lang
+                these_exs = "; ".join([ex[j] for ex in examples])
+                writer.writerow([lang.family,
+                                 col_id,
+                                 count,
+                                 sound.left_context,
+                                 sound.sound,
+                                 sound.right_context,
+                                 lang.name,
+                                 lang.glottocode,
+                                 these_exs
+                                 ])
 
     with open(output_prefix + '_cognate_info.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
@@ -757,8 +725,7 @@ def run(args):
             writer.writerow([family, infos["min_mutual_coverage"], infos["average_coverage"],
                               infos["lexstat_params"]])
 
-    metadata_dict = {"observation cutoff": args.cutoff,
-                     "concepts": args.concepts,
+    metadata_dict = {"concepts": args.concepts,
                      "dataset": args.dataset}
     dataset_str = sorted(a + "/" + b for a, b in dataset_list)
     metadata_dict["dataset_list"] = dataset_str
@@ -766,13 +733,10 @@ def run(args):
     metadata_dict["n_families"] = len(data._data)
     metadata_dict["n_concepts"] = len(data.concepts_subset)
     metadata_dict["n_tokens"] = sum([len(data._data[f])-1 for f in data._data])
-    metadata_dict["n_cognate_pairs_across_datasets"] = pairs_across_datasets
-    metadata_dict["n_cognate_pairs_in_datasets"] = pairs_in_dataset
-    metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
 
     # TODO: update cognate eval
     for family, dataset in corresp_finder.data.evals:
-        metadata_dict["eval_{}_{}".format(family,dataset)] = corresp_finder.data.evals[dataset]
+        metadata_dict["eval_{}_{}".format(family,dataset)] = corresp_finder.data.evals[(family, dataset)]
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:

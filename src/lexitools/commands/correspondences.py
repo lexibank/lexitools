@@ -216,13 +216,12 @@ class FlyWeight(type):
 
 @dataclass(eq=True, frozen=True)
 class Lang(metaclass=FlyWeight):
-    """ A Language has a name, a glottocode, a genus and a family.
+    """ A Language has a name, a glottocode, and a family.
 
         This class is FlyWeight: we don't want duplicate objects for the exact
         same language.
     """
-    __slots__ = ('genus', 'glottocode', 'family', 'name')
-    genus: str
+    __slots__ = ('glottocode', 'family', 'name')
     glottocode: str
     family: str
     name: str
@@ -254,12 +253,10 @@ def wordlist_subset(lex, f):
             out[i] = row
     return out
 
-class SoundCorrespsByGenera(object):
-    """ Loads lexibank data, organized by genera, to facilitate the counting of correspondences.
+class CognateFinder(object):
+    """ Loads lexibank data, organized by families, to facilitate the counting of correspondences.
 
     Attributes:
-        genera_to_lang (defaultdict): a mapping of each genus to Lang objects.
-            Genera are loaded from Tiago Tresoldi's langgenera.
         errors (list of list): table which summarizes errors encountered in tokens.
         concepts_subset (set): the set of all concepts which will be kept.
         lang_to_concept (defaultdict): mapping of Lang to concepts.
@@ -269,18 +266,17 @@ class SoundCorrespsByGenera(object):
          exactly one token in a given language and dataset.
     """
 
-    def __init__(self, db, langgenera_path, coarsen, concept_list=None,glottolog=None):
+    def __init__(self, db, coarsen, glottolog, concept_list=None):
         """ Initialize the data by collecting, processing and organizing tokens.
 
         Iterates over the database, to:
-        - Identify genera and family name for all languages
+        - Identify the family for all languages
         - If specified, restrict data to a specific list of concepts.
         - Pre-process tokens to replace sounds by sound classes and count syllables
         - Make note of any tokens which result in errors.
 
         Args:
             db (MockLexicore): Lexicore database
-            langgenera_path (str): path to a tsv export of langgenera
             concept_list (str): name of a concepticon concept list
             sound_class (func): a function which associates a class of sounds to any BIPA
             sound string.
@@ -295,22 +291,17 @@ class SoundCorrespsByGenera(object):
         self.evals = {}
         self.stats = {}
 
-        # dict of genus -> lingpy internal Wordlist dict
+        # dict of family -> lingpy internal Wordlist dict
         self._data = defaultdict(lambda: {0: namespace})
 
         self.coarsen = coarsen
-
-        with csvw.UnicodeDictReader(langgenera_path, delimiter="\t") as reader:
-            lang_to_genera = {row['GLOTTOCODE']: row['GENUS'] for row in reader}
-
+        #
         # Obtain glottocode and family:
         # family can be obtained from glottolog (this is slow) if glottolog is loaded
         # if there is no glottocode, we can still use the hardcoded family
-        self.languages = {}
-        # this is less slow than calling .langoid(code) for each code
-        langoids = glottolog.languoids_by_code()
+        self.languages = self.prepare_languages(db, glottolog)
+
         self.errors = [["Dataset", "Language_ID", "Sound", "Token", "ID"]]
-        self.populate_genera_to_lang(db, lang_to_genera, langoids)
 
         concepts = {row["ID"]: (row["Concepticon_ID"], row["Concepticon_Gloss"])
                     for row in
@@ -356,8 +347,8 @@ class SoundCorrespsByGenera(object):
             if cogid is None:
                 cogid = row.get("Cognateset_ID", None)
 
-            # Build internal dataset per genus
-            self._data[language.genus][idx] = [
+            # Build internal dataset per family
+            self._data[language.family][idx] = [
                 row["Language_ID"],  # doculect
                 concept_gloss,
                 concept_id,
@@ -369,28 +360,26 @@ class SoundCorrespsByGenera(object):
                 cogid,
                 row["dataset"]]
 
-    def populate_genera_to_lang(self, db, lang_to_genera, langoids):
-        self.genera_to_lang = defaultdict(set)
+    def prepare_languages(self, db, glottolog):
+        # this is less slow than calling .langoid(code) for each code
+        langoids = glottolog.languoids_by_code()
+        languages = {}
         for row in progressbar(db.iter_table("LanguageTable"), desc="listing languages"):
             gcode = row["Glottocode"]
-            if gcode is None or gcode not in lang_to_genera:
-                continue
-            genus = lang_to_genera[gcode]
+            if gcode is None: continue
             family = row["Family"]
             langoid = langoids.get(gcode, None)
             if langoid is not None and langoid.family is not None:
                 family = langoid.family.name
-
-            lang = Lang(genus=genus, family=family, glottocode=gcode, name=langoid.name)
-            self.genera_to_lang[genus].add(lang)
-            self.languages[row["ID"]] = lang
+            languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=langoid.name)
+        return languages
 
     def __getitem__(self, args):
         cols = list(self.cols)
-        genus, item = args
+        family, item = args
         if type(item) is int:
-            return dict(zip(cols, self._data[genus][item]))
-        return [self[genus, i] for i in item]
+            return dict(zip(cols, self._data[family][item]))
+        return [self[family, i] for i in item]
 
     def sanity_stats(self, lex):
         def mut_cov():
@@ -406,25 +395,23 @@ class SoundCorrespsByGenera(object):
         lingpy.log.get_logger().setLevel(logging.WARNING)
         pbar = progressbar(self._data, desc="looking for cognates...")
         eval_measures = ["precision", "recall", "f-score"]
-        for genus in pbar:
+        for family in pbar:
+            pbar.set_description("looking for cognates in family %s" % family)
+            lex = lingpy.LexStat(self._data[family], check=True)
 
-            pbar.set_description("looking for cognates in genus %s" % genus)
-            lex = lingpy.LexStat(self._data[genus], check=True)
 
-
-            self.stats[genus] = self.sanity_stats(lex)
+            self.stats[family] = self.sanity_stats(lex)
 
             kw = dict(method='lexstat', threshold=0.55, ref="pred_cogid",
                       cluster_method='infomap')
-            if self.stats[genus]["average_coverage"] < .80 \
-                    or self.stats[genus]["min_mutual_coverage"] < 100:
+            if self.stats[family]["average_coverage"] < .80 \
+                    or self.stats[family]["min_mutual_coverage"] < 100:
                 kw = dict(method="sca", threshold=0.45, ref='pred_cogid')
-            self.stats[genus]["lexstat_params"] = " ".join("=".join([k, str(v)]) for k, v in kw.items())
+            self.stats[family]["lexstat_params"] = " ".join("=".join([k, str(v)]) for k, v in kw.items())
 
 
             lex.get_scorer(runs=100)
             lex.cluster(**kw)
-            # lex.output('tsv', filename=file_template.format(genus))
 
             ## here create a new column based on pred and gold cogids ?
 
@@ -435,7 +422,7 @@ class SoundCorrespsByGenera(object):
                 # list concatenation of the cognate indexes
                 cognateset = sum(
                     [x for x in alm.etd["pred_cogid"][cognate_idx] if x != 0], [])
-                rows = self[genus, cognateset]
+                rows = self[family, cognateset]
                 alignments = [alm[i, "alignment"] for i in cognateset]
                 yield rows, alignments
 
@@ -443,7 +430,7 @@ class SoundCorrespsByGenera(object):
                 # separate data by dataset, keep only if gold annotation exists
                 columns = lex.columns
                 by_datasets = defaultdict(lambda: [list(columns)])
-                for i, r in self._data[genus].items():
+                for i, r in self._data[family].items():
                     if i > 0 and r[self.cols['cogid']] is not None:
                         dataset = r[self.cols['cldf_dataset']]
                         by_datasets[dataset].append(r)
@@ -457,7 +444,7 @@ class SoundCorrespsByGenera(object):
                                  lingpy.evaluate.acd.bcubes(lex, gold='cogid',
                                  test='pred_cogid',pprint=False)))
                     d.update(self.sanity_stats(lex))
-                    self.evals[(genus,dataset)] = d
+                    self.evals[(family,dataset)] = d
 
     def _iter_phonemes(self, row):
         """ Iterate over pre-processed phonemes from a row's token.
@@ -489,18 +476,6 @@ class SoundCorrespsByGenera(object):
                 self.errors.append((row["dataset"], row["Language_ID"], segment,
                                     " ".join(str(x) for x in segments), row["ID"]))
                 raise e
-    #
-    # def __iter__(self):
-    #     """Iterate over all (family, genus, lang, tokens) in the dataset.
-    #     """
-    #     for genus in self._data:
-    #         for idx in self._data[genus]:
-    #             if idx > 0:
-    #                 row = self._data[genus][idx]
-    #                 doculect = row[self.cols["doculect"]]
-    #                 lang = self.languages[doculect]
-    #                 yield lang.family, genus, doculect, row[self.cols["tokens"]]
-
 
 def register(parser):
     # Standard catalogs can be "requested" as follows:
@@ -554,7 +529,7 @@ class Correspondences(object):
 
     Attributes:
         args: the full args passed to the correspondences command.
-        data (SoundCorrespsByGenera): the lexicore dataset
+        data (CognateFinder): the lexicore dataset
         clts (pyclts.CLTS): a clts instance
         bipa_cache (dict): maps strings to bipa sounds.
         counts (Counter): occurences of pairs of Sounds (the keys are frozensets).
@@ -571,7 +546,7 @@ class Correspondences(object):
 
         Args:
             args: the full args passed to the correspondences command.
-            data (SoundCorrespsByGenera): the data
+            data (CognateFinder): the data
             eval_cognates (bool): whether to evaluate cognacy detection.
             cognate_confusion_matrix (list of list): confusion matrix
             features_func (func): function to get sound features
@@ -690,13 +665,10 @@ def run(args):
     correspondences. It output a series of files which start by a time-stamp,
     then "_sound_correspondences_" and end in:
 
-    `_available.csv`: a csv table of available sounds. The header row is:
-        `Family,Genus,Sound A,Sound B`. The order of Sound A and
-        Sound B is not meaningful, we do not duplicate A/B and B/A.
     `_coarsening.csv`: output only if run with the model "Coarse". This is a table of all
         known coarse sounds.
     `_counts.csv`: a csv table recording correspondences. The header row is:
-    `family,genus,lang_a,lang_b,sound_a,sound_b,env_a,env_b,count`.
+    `family,lang_a,lang_b,sound_a,sound_b,env_a,env_b,count`.
         The order of languages A/B and sounds A/B is not meaningful,
         we do not duplicate A/B and B/A. Env A and B are the environments in which sounds
         were observed (their contexts).
@@ -706,7 +678,6 @@ def run(args):
     `_metadata.json`: a json file recording the input parameters and all relevant metadata.
     """
     args.log.info(args)
-    langgenera_path = "./src/lexitools/commands/lang_genera-v1.0.0.tsv"
     clts = args.clts.from_config().api
     now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
     output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
@@ -718,14 +689,11 @@ def run(args):
     dataset_list = LEXICORE if args.dataset == "lexicore" else [args.dataset.split("/")]
     db = MockLexicore(dataset_list)
 
-    data = SoundCorrespsByGenera(db, langgenera_path,
-                                 coarsen=coarse,
-                                 concept_list=args.concepts,
-                                 glottolog=pyglottolog.Glottolog(
-                                     args.glottolog.dir))
+    data = CognateFinder(db, coarse, pyglottolog.Glottolog(args.glottolog.dir),
+                         concept_list=args.concepts)
 
     args.log.info(
-        'Loaded the wordlist ({} languages, {} genera, {} concepts kept)'.format(
+        'Loaded the wordlist ({} languages, {} families, {} concepts kept)'.format(
             len(data.languages),
             len(data._data),
             len(data.concepts_subset)))
@@ -753,7 +721,7 @@ def run(args):
 
     with open(output_prefix + '_counts.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["family", "genus", "lang_a", "lang_b", "sound_a",
+        writer.writerow(["family", "lang_a", "lang_b", "sound_a",
                          "sound_b", "env_a", "env_b", "count", "examples"])
         for sounds in corresp_finder.counts:
             # ensure to always have the same order.
@@ -763,7 +731,7 @@ def run(args):
             if count > max(2, args.cutoff * total):
                 examples = [format_ex(rows) for rows in corresp_finder.examples[sounds]]
                 examples = "; ".join(examples)
-                writer.writerow([A.lang.family, A.lang.genus,
+                writer.writerow([A.lang.family,
                                  A.lang.glottocode, B.lang.glottocode,
                                  A.sound, B.sound, A.context, B.context, count, examples])
 
@@ -783,10 +751,10 @@ def run(args):
 
     with open(output_prefix + '_cognate_info.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["genus", "min_mutual_coverage", "average_coverage","lexstat_params"])
-        for genus in corresp_finder.data.stats:
-            infos = corresp_finder.data.stats[genus]
-            writer.writerow([genus, infos["min_mutual_coverage"], infos["average_coverage"],
+        writer.writerow(["family", "min_mutual_coverage", "average_coverage","lexstat_params"])
+        for family in corresp_finder.data.stats:
+            infos = corresp_finder.data.stats[family]
+            writer.writerow([family, infos["min_mutual_coverage"], infos["average_coverage"],
                               infos["lexstat_params"]])
 
     metadata_dict = {"observation cutoff": args.cutoff,
@@ -795,16 +763,16 @@ def run(args):
     dataset_str = sorted(a + "/" + b for a, b in dataset_list)
     metadata_dict["dataset_list"] = dataset_str
     # metadata_dict["n_languages"] = len(data.lang_to_concept)
-    metadata_dict["n_genera"] = len(data.genera_to_lang)
+    metadata_dict["n_families"] = len(data._data)
     metadata_dict["n_concepts"] = len(data.concepts_subset)
-    metadata_dict["n_tokens"] = len(data._data)
+    metadata_dict["n_tokens"] = sum([len(data._data[f])-1 for f in data._data])
     metadata_dict["n_cognate_pairs_across_datasets"] = pairs_across_datasets
     metadata_dict["n_cognate_pairs_in_datasets"] = pairs_in_dataset
     metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
 
     # TODO: update cognate eval
-    for genus, dataset in corresp_finder.data.evals:
-        metadata_dict["eval_{}_{}".format(genus,dataset)] = corresp_finder.data.evals[dataset]
+    for family, dataset in corresp_finder.data.evals:
+        metadata_dict["eval_{}_{}".format(family,dataset)] = corresp_finder.data.evals[dataset]
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:

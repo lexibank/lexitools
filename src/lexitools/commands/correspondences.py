@@ -11,6 +11,8 @@ from cldfcatalog import Config
 
 import lingpy
 import lingpy.evaluate
+from lingpy.compare.util import mutual_coverage_check, mutual_coverage_subset
+from lingpy.compare.sanity import average_coverage
 from itertools import combinations
 from collections import Counter, defaultdict
 from pylexibank import progressbar
@@ -33,62 +35,62 @@ lingpy.settings.rcParams["merge_vowels"] = False
 # import cProfile
 
 LEXICORE = [
-    ('lexibank', 'aaleykusunda'),
-    ('lexibank', 'abrahammonpa'),
-    ('lexibank', 'allenbai'),
-    ('lexibank', 'bdpa'),
-    ('lexibank', 'beidasinitic'), ('lexibank', 'birchallchapacuran'),
-    ('sequencecomparison', 'blustaustronesian'),
-    ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
-    ('lexibank', 'cals'), ('lexibank', 'castrosui'),
-    ('lexibank', 'castroyi'), ('lexibank', 'chaconarawakan'),
-    ('lexibank', 'chaconbaniwa'), ('lexibank', 'chaconcolumbian'),
-    ('lexibank', 'chenhmongmien'), ('lexibank', 'chindialectsurvey'),
-    ('lexibank', 'davletshinaztecan'), ('lexibank', 'deepadungpalaung'),
-    ('lexibank', 'dravlex'), ('lexibank', 'dunnaslian'),
-    ('sequencecomparison', 'dunnielex'), ('lexibank', 'galuciotupi'),
-    ('lexibank', 'gerarditupi'), ('lexibank', 'halenepal'),
-    ('lexibank', 'hantganbangime'),
-    ('sequencecomparison', 'hattorijaponic'),
-    ('sequencecomparison', 'houchinese'),
-    ('lexibank', 'hubercolumbian'), ('lexibank', 'ivanisuansu'),
-    ('lexibank', 'johanssonsoundsymbolic'),
-    ('lexibank', 'joophonosemantic'),
-    ('sequencecomparison', 'kesslersignificance'),
-    ('lexibank', 'kraftchadic'), ('lexibank', 'leekoreanic'),
-    ('lexibank', 'lieberherrkhobwa'), ('lexibank', 'lundgrenomagoa'),
-    ('lexibank', 'mannburmish'), ('lexibank', 'marrisonnaga'),
-    ('lexibank', 'mcelhanonhuon'), ('lexibank', 'mitterhoferbena'),
-    ('lexibank', 'naganorgyalrongic'), ('lexibank', 'northeuralex'),
-    ('lexibank', 'peirosaustroasiatic'),
-    ('lexibank', 'pharaocoracholaztecan'), ('lexibank', 'robinsonap'),
-    ('lexibank', 'sagartst'), ('lexibank', 'savelyevturkic'),
-    ('lexibank', 'sohartmannchin'),
-    ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
-    ('lexibank', 'transnewguineaorg'), ('lexibank', 'tryonsolomon'),
-    ('lexibank', 'walkerarawakan'),
-    ('lexibank', 'walworthpolynesian'),
-    ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
-    ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
-    ('sequencecomparison', 'zhivlovobugrian'),
-    ('lexibank', 'backstromnorthernpakistan'),
-    ('lexibank', 'baf2'),
-    ('lexibank', 'clarkkimmun'),
-    ('lexibank', 'housinitic'),
-    ('lexibank', 'hsiuhmongmien'),
-    ('lexibank', 'lamayi'),
-    ('lexibank', 'liusinitic'),
-    ('lexibank', 'mortensentangkhulic'),
-    ('lexibank', 'polyglottaafricana'),
-    ('lexibank', 'simsrma'),
-    ('lexibank', 'starostinhmongmien'),
+    # ('lexibank', 'aaleykusunda'),
+    # ('lexibank', 'abrahammonpa'),
+    # ('lexibank', 'allenbai'),
+    # ('lexibank', 'bdpa'),
+    # ('lexibank', 'beidasinitic'), ('lexibank', 'birchallchapacuran'),
+    # ('sequencecomparison', 'blustaustronesian'),
+    # ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
+    # ('lexibank', 'cals'), ('lexibank', 'castrosui'),
+    # ('lexibank', 'castroyi'), ('lexibank', 'chaconarawakan'),
+    # ('lexibank', 'chaconbaniwa'), ('lexibank', 'chaconcolumbian'),
+    # ('lexibank', 'chenhmongmien'), ('lexibank', 'chindialectsurvey'),
+    # ('lexibank', 'davletshinaztecan'), ('lexibank', 'deepadungpalaung'),
+    # ('lexibank', 'dravlex'), ('lexibank', 'dunnaslian'),
+    # ('sequencecomparison', 'dunnielex'), ('lexibank', 'galuciotupi'),
+    # ('lexibank', 'gerarditupi'), ('lexibank', 'halenepal'),
+    # ('lexibank', 'hantganbangime'),
+    # ('sequencecomparison', 'hattorijaponic'),
+    # ('sequencecomparison', 'houchinese'),
+    # ('lexibank', 'hubercolumbian'), ('lexibank', 'ivanisuansu'),
+    # ('lexibank', 'johanssonsoundsymbolic'),
+    # ('lexibank', 'joophonosemantic'),
+    # ('sequencecomparison', 'kesslersignificance'),
+    # ('lexibank', 'kraftchadic'), ('lexibank', 'leekoreanic'),
+    # ('lexibank', 'lieberherrkhobwa'), ('lexibank', 'lundgrenomagoa'),
+    # ('lexibank', 'mannburmish'), ('lexibank', 'marrisonnaga'),
+    # ('lexibank', 'mcelhanonhuon'), ('lexibank', 'mitterhoferbena'),
+    # ('lexibank', 'naganorgyalrongic'), ('lexibank', 'northeuralex'),
+    # ('lexibank', 'peirosaustroasiatic'),
+    # ('lexibank', 'pharaocoracholaztecan'), ('lexibank', 'robinsonap'),
+    # ('lexibank', 'sagartst'), ('lexibank', 'savelyevturkic'),
+    # ('lexibank', 'sohartmannchin'),
+    # ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
+    # ('lexibank', 'transnewguineaorg'), ('lexibank', 'tryonsolomon'),
+    # ('lexibank', 'walkerarawakan'),
+    # ('lexibank', 'walworthpolynesian'),
+    # ('lexibank', 'wold'), ('lexibank', 'yanglalo'),
+    # ('lexibank', 'zgraggenmadang'), ('lexibank', 'zhaobai'),
+    # ('sequencecomparison', 'zhivlovobugrian'),
+    # ('lexibank', 'backstromnorthernpakistan'),
+    # ('lexibank', 'baf2'),
+    # ('lexibank', 'clarkkimmun'),
+    # ('lexibank', 'housinitic'),
+    # ('lexibank', 'hsiuhmongmien'),
+    # ('lexibank', 'lamayi'),
+    # ('lexibank', 'liusinitic'),
+    # ('lexibank', 'mortensentangkhulic'),
+    # ('lexibank', 'polyglottaafricana'),
+    # ('lexibank', 'simsrma'),
+    # ('lexibank', 'starostinhmongmien'),
     ('lexibank', 'starostinkaren'),
-    ('lexibank', 'tppsr'),
-    ('lexibank', 'vanbikkukichin'),
-    ('lexibank', 'wangbai'),
-    ('lexibank', 'wheelerutoaztecan'),
-    ('lexibank', 'wichmannmixezoquean'),
-    ('sequencecomparison', 'listsamplesize')
+    # ('lexibank', 'tppsr'),
+    # ('lexibank', 'vanbikkukichin'),
+    # ('lexibank', 'wangbai'),
+    # ('lexibank', 'wheelerutoaztecan'),
+    # ('lexibank', 'wichmannmixezoquean'),
+    # ('sequencecomparison', 'listsamplesize')
 ]
 
 # These ones have cognate ids:
@@ -243,6 +245,14 @@ class Sound(metaclass=FlyWeight):
     lang: Lang
     context: str
 
+def wordlist_subset(lex, f):
+    out = {}
+    for i, row in lex._data.items():
+        if i == 0:
+            out[i] = row
+        if f(i, row):
+            out[i] = row
+    return out
 
 class SoundCorrespsByGenera(object):
     """ Loads lexibank data, organized by genera, to facilitate the counting of correspondences.
@@ -253,8 +263,6 @@ class SoundCorrespsByGenera(object):
         genera_to_lang (defaultdict): a mapping of each genus to Lang objects.
             Genera are loaded from Tiago Tresoldi's langgenera.
         errors (list of list): table which summarizes errors encountered in tokens.
-        concepts_intersection (Counter): Counts the number of distinct concepts kept
-            for each pair of languages encountered in a genera.
         concepts_subset (set): the set of all concepts which will be kept.
         lang_to_concept (defaultdict): mapping of Lang to concepts.
         _data (defaultdict): mapping of (lang, concept) -> token string -> word instances
@@ -288,6 +296,7 @@ class SoundCorrespsByGenera(object):
                      'cogid', 'cldf_dataset']
         self.cols = {n: i for i, n in enumerate(namespace)}
         self.evals = {}
+        self.stats = {}
 
         # dict of genus -> lingpy internal Wordlist dict
         self._data = defaultdict(lambda: {0: namespace})
@@ -304,7 +313,6 @@ class SoundCorrespsByGenera(object):
         # this is less slow than calling .langoid(code) for each code
         langoids = glottolog.languoids_by_code()
         self.errors = [["Dataset", "Language_ID", "Sound", "Token", "ID"]]
-        self.concepts_intersection = Counter()
         self.populate_genera_to_lang(db, lang_to_genera, langoids)
 
         concepts = {row["ID"]: (row["Concepticon_ID"], row["Concepticon_Gloss"])
@@ -387,15 +395,38 @@ class SoundCorrespsByGenera(object):
             return dict(zip(cols, self._data[genus][item]))
         return [self[genus, i] for i in item]
 
+    def sanity_stats(self, lex):
+        def mut_cov():
+            for i in range(lex.height, 1, -1):
+                if mutual_coverage_check(lex, i):
+                    return i
+            return 0
+        d = {"min_mutual_coverage": mut_cov(),
+             "average_coverage": average_coverage(lex)}
+        return d
+
     def find_cognates(self, eval=False):
         lingpy.log.get_logger().setLevel(logging.WARNING)
         pbar = progressbar(self._data, desc="looking for cognates...")
+        eval_measures = ["precision", "recall", "f-score"]
         for genus in pbar:
+
             pbar.set_description("looking for cognates in genus %s" % genus)
             lex = lingpy.LexStat(self._data[genus], check=True)
-            lex.get_scorer(runs=1000)
-            lex.cluster(method='lexstat', threshold=0.55, ref="pred_cogid",
-                        cluster_method='infomap')
+
+
+            self.stats[genus] = self.sanity_stats(lex)
+
+            kw = dict(method='lexstat', threshold=0.55, ref="pred_cogid",
+                      cluster_method='infomap')
+            if self.stats[genus]["average_coverage"] < .80 \
+                    or self.stats[genus]["min_mutual_coverage"] < 100:
+                kw = dict(method="sca", threshold=0.45, ref='pred_cogid')
+            self.stats[genus]["lexstat_params"] = " ".join("=".join([k, str(v)]) for k, v in kw.items())
+
+
+            lex.get_scorer(runs=100)
+            lex.cluster(**kw)
             # lex.output('tsv', filename=file_template.format(genus))
 
             ## here create a new column based on pred and gold cogids ?
@@ -413,26 +444,23 @@ class SoundCorrespsByGenera(object):
 
             if eval:
                 # separate data by dataset, keep only if gold annotation exists
-                by_datasets = defaultdict(lambda: [self._data[genus][0]])
-
+                columns = lex.columns
+                by_datasets = defaultdict(lambda: [list(columns)])
                 for i, r in self._data[genus].items():
                     if i > 0 and r[self.cols['cogid']] is not None:
                         dataset = r[self.cols['cldf_dataset']]
                         by_datasets[dataset].append(r)
 
                 # Evaluate inside each dataset
-                # This re-runs lexstat, but it is the only clean way I found to evaluate
                 for dataset in by_datasets:
                     pbar.set_description("evaluating against gold rows in %s" % dataset)
                     gold_rows = dict(enumerate(by_datasets[dataset]))
                     lex = lingpy.LexStat(gold_rows)
-                    lex.get_scorer(runs=1000)
-                    lex.cluster(method='lexstat', threshold=0.55, ref="pred_cogid",
-                                cluster_method='infomap')
-
-                    self.evals[dataset] = lingpy.evaluate.acd.bcubes(lex, gold='cogid',
-                                                                     test='pred_cogid',
-                                                                     pprint=False)
+                    d = dict(zip(eval_measures,
+                                 lingpy.evaluate.acd.bcubes(lex, gold='cogid',
+                                 test='pred_cogid',pprint=False)))
+                    d.update(self.sanity_stats(lex))
+                    self.evals[(genus,dataset)] = d
 
     def _iter_phonemes(self, row):
         """ Iterate over pre-processed phonemes from a row's token.
@@ -748,12 +776,8 @@ def run(args):
         Sound B is not meaningful, we do not duplicate A/B and B/A.
     `_coarsening.csv`: output only if run with the model "Coarse". This is a table of all
         known coarse sounds.
-    `_concepts_intersection.csv`: a csv table giving the number of common concepts
-        in the data, and of concepts kept, for each pair of languages A and B.
-        The header row is `Lang A,Lang B,Common concepts,Kept concepts`.
-        The order of Lang A and Lang B is not meaningful, we do not duplicate A/B and B/A.
     `_counts.csv`: a csv table recording correspondences. The header row is:
-    `Family,Genus,Lang A,Lang B,Sound A,Sound B,Env A,Env B,Count`.
+    `family,genus,lang_a,lang_b,sound_a,sound_b,env_a,env_b,count`.
         The order of languages A/B and sounds A/B is not meaningful,
         we do not duplicate A/B and B/A. Env A and B are the environments in which sounds
         were observed (their contexts).
@@ -768,7 +792,7 @@ def run(args):
     now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
     output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
 
-    """Three options for sound classes:
+    """options for sound classes:
     1. Keep original BIPA symbols. Very precise, but variations in annotation make the results noisy.
     2. Coarsen BIPA to keep only some main features. This tries to strike a balance between BIPA and avoiding noise.
     """
@@ -860,19 +884,18 @@ def run(args):
             else:
                 pairs_across_datasets += count
 
+    with open(output_prefix + '_cognate_info.csv', 'w', encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerow(["genus", "min_mutual_coverage", "average_coverage","lexstat_params"])
+        for genus in corresp_finder.data.stats:
+            infos = corresp_finder.data.stats[genus]
+            writer.writerow([genus, infos["min_mutual_coverage"], infos["average_coverage"],
+                              infos["lexstat_params"]])
+
     with open(output_prefix + '_available.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
         writer.writerow(["family", "genus", "sound_a", "sound_B"])
         writer.writerows(available)
-
-    with open(output_prefix + '_concepts_intersection.csv', 'w',
-              encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["lang_a", "lang_b", "common_concepts", "kept_concepts"])
-        for lA, lB in data.concepts_intersection:
-            concepts = data.concepts_intersection[(lA, lB)]
-            kept = corresp_finder.total_cognates[(lA, lB)]
-            writer.writerow([lA.glottocode, lB.glottocode, concepts, kept])
 
     metadata_dict = {"observation cutoff": args.cutoff,
                      "model": args.model,
@@ -889,11 +912,8 @@ def run(args):
     metadata_dict["cutoff_method"] = "max(2, cutoff * shared_cognates)"
 
     # TODO: update cognate eval
-    for dataset in corresp_finder.data.evals:
-        p, r, f = corresp_finder.data.evals[dataset]
-        metadata_dict["eval_{}_precision".format(dataset)] = p
-        metadata_dict["eval_{}_recall".format(dataset)] = r
-        metadata_dict["eval_{}_fscore".format(dataset)] = f
+    for genus, dataset in corresp_finder.data.evals:
+        metadata_dict["eval_{}_{}".format(genus,dataset)] = corresp_finder.data.evals[dataset]
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:

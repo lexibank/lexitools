@@ -258,8 +258,6 @@ class SoundCorrespsByGenera(object):
     """ Loads lexibank data, organized by genera, to facilitate the counting of correspondences.
 
     Attributes:
-        sound_class (func): a function which associates a class of sounds to any BIPA
-            sound string.
         genera_to_lang (defaultdict): a mapping of each genus to Lang objects.
             Genera are loaded from Tiago Tresoldi's langgenera.
         errors (list of list): table which summarizes errors encountered in tokens.
@@ -271,8 +269,7 @@ class SoundCorrespsByGenera(object):
          exactly one token in a given language and dataset.
     """
 
-    def __init__(self, db, langgenera_path, concept_list=None,
-                 sound_class=None, glottolog=None):
+    def __init__(self, db, langgenera_path, coarsen, concept_list=None,glottolog=None):
         """ Initialize the data by collecting, processing and organizing tokens.
 
         Iterates over the database, to:
@@ -301,7 +298,7 @@ class SoundCorrespsByGenera(object):
         # dict of genus -> lingpy internal Wordlist dict
         self._data = defaultdict(lambda: {0: namespace})
 
-        self.sound_class = sound_class
+        self.coarsen = coarsen
 
         with csvw.UnicodeDictReader(langgenera_path, delimiter="\t") as reader:
             lang_to_genera = {row['GLOTTOCODE']: row['GENUS'] for row in reader}
@@ -487,22 +484,22 @@ class SoundCorrespsByGenera(object):
             try:
                 if "/" in segment:
                     segment = segment.split("/")[1]
-                yield self.sound_class(segment)
+                yield self.coarsen[segment]
             except ValueError as e:
                 self.errors.append((row["dataset"], row["Language_ID"], segment,
                                     " ".join(str(x) for x in segments), row["ID"]))
                 raise e
-
-    def __iter__(self):
-        """Iterate over all (family, genus, lang, tokens) in the dataset.
-        """
-        for genus in self._data:
-            for idx in self._data[genus]:
-                if idx > 0:
-                    row = self._data[genus][idx]
-                    doculect = row[self.cols["doculect"]]
-                    lang = self.languages[doculect]
-                    yield lang.family, genus, doculect, row[self.cols["tokens"]]
+    #
+    # def __iter__(self):
+    #     """Iterate over all (family, genus, lang, tokens) in the dataset.
+    #     """
+    #     for genus in self._data:
+    #         for idx in self._data[genus]:
+    #             if idx > 0:
+    #                 row = self._data[genus][idx]
+    #                 doculect = row[self.cols["doculect"]]
+    #                 lang = self.languages[doculect]
+    #                 yield lang.family, genus, doculect, row[self.cols["tokens"]]
 
 
 def register(parser):
@@ -530,13 +527,6 @@ def register(parser):
         default=0.05,
         type=float,
         help='Cutoff for attested correspondences in a language pair, in proportion of the list of cognates.')
-
-    parser.add_argument(
-        '--model',
-        choices=["BIPA", "Coarse"],
-        default='BIPA',
-        type=str,
-        help='select a sound class model: BIPA or Coarse.')
     #
     # parser.add_argument(
     #     '--alignment',
@@ -576,92 +566,25 @@ class Correspondences(object):
         eval_cognates (bool): whether to evaluate cognacy detection.
     """
 
-    def __init__(self, args, data, clts, features_func=None, eval_cognates=False):
+    def __init__(self, args, data, eval_cognates=False):
         """ Initialization only records the arguments and defines the attributes.
 
         Args:
             args: the full args passed to the correspondences command.
             data (SoundCorrespsByGenera): the data
-            clts (pyclts.CLTS): a clts instance
             eval_cognates (bool): whether to evaluate cognacy detection.
             cognate_confusion_matrix (list of list): confusion matrix
             features_func (func): function to get sound features
         """
         self.args = args
         self.data = data
-        self.clts = clts
-        self.sca_cache = {}
-        self.bipa_cache = {}
         self.counts = Counter()
         self.examples = defaultdict(list)
         self.total_cognates = Counter()
         self.tones = set("⁰¹²³⁴⁵˥˦˧˨↓↑↗↘")
         self.cognates_pairs_by_datasets = Counter()
-        self.get_features = features_func
         self.score_cache = {}
         self.eval_cognates = eval_cognates
-
-    def bipa(self, item):
-        """ Caches calls to the bipa transcription system, as resolve_sound is too slow.
-
-        Args:
-            item: a string representing a sound
-
-        Returns:
-            bipa (Sound): the corresponding BIPA sound
-        """
-        try:
-            return self.bipa_cache[item]
-        except KeyError:
-            self.bipa_cache[item] = self.clts.bipa[item]
-            return self.bipa_cache[item]
-
-    def find_available(self):
-        """ Find which pairs of sounds from our data are available in each genera.
-
-        - A pair of two distinct sounds x,y are available in a genus if the genus has at
-         least two distinct languages A,B such that A has at least two occurences of x
-         and B has at least two occurences of y.
-        - A pair of a sound and a gap (x,-) is available in a genus if that genus has a
-        language with at least two occurences of x.
-        - A pair of a sound and itself (x,x) is available in a genus if that genus has a
-         language with at least two occurences of x.
-
-        Returns:
-            available (list of lists): Inner lists are rows with [family, genus, soundA, soundB]
-        """
-
-        self.args.log.info('Counting available corresp...')
-
-        sounds_by_genera = defaultdict(lambda: defaultdict(Counter))
-        for family, genus, lang, tokens in self.data:
-            for sound in tokens:
-                if sound not in IGNORE:  # spaces and segmentation symbols ignored
-                    sounds_by_genera[(family, genus)][sound][lang] += 1
-
-        available = list()
-        for family, genus in list(sounds_by_genera):
-            freq = sounds_by_genera[(family, genus)]
-            n_sounds = len(freq)
-            tot_sound_pairs = (n_sounds * (n_sounds - 1)) / 2
-            sound_pairs = combinations(freq, r=2)
-
-            for sound_A in progressbar(freq):
-                if sound_A != "-":  # No point in counting corresp between blank and itself
-                    occ = {lg for lg in freq[sound_A] if freq[sound_A][lg] > 1}
-                    if len(occ) > 1:
-                        available.append([family, genus, sound_A, sound_A])
-                    if len(occ) > 0:
-                        available.append([family, genus, sound_A, "-"])
-
-            for sound_A, sound_B in progressbar(sound_pairs, total=tot_sound_pairs):
-                occ_A = {lg for lg in freq[sound_A] if freq[sound_A][lg] > 1}
-                occ_B = {lg for lg in freq[sound_B] if freq[sound_B][lg] > 1}
-                if occ_A and occ_B and len(occ_A | occ_B) > 1:
-                    sound_A, sound_B = tuple(sorted((sound_A, sound_B)))
-                    available.append([family, genus, sound_A, sound_B])
-
-        return available
 
     def sounds_and_contexts(self, almA, almB):
         """ Iterator of sounds and contexts for a pair of aligned tokens.
@@ -678,13 +601,10 @@ class Correspondences(object):
         def to_categories(sequence):
             """Turn a sequence of sounds into a sequence of categories used in contexts"""
             for s in sequence:
-                cat = self.bipa(s).type
+                cat = self.data.coarsen.category(s)
                 if s == "-" or s in IGNORE or cat in {"tone"}:
                     yield None
-                elif cat in {"vowel", "diphthong"}:
-                    yield "V"
-                else:
-                    yield "C"  # consonant or cluster
+                yield cat
             yield "#"
 
         def get_context(cats, i, sound, left):
@@ -708,7 +628,6 @@ class Correspondences(object):
             prevB = prevB if catsB[i] is None else catsB[i]
             yield (sA, cA), (sB, cB)
 
-    #
     def find_attested_corresps(self):
         """ Find all correspondences attested in our data.
 
@@ -792,34 +711,15 @@ def run(args):
     now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
     output_prefix = "{timestamp}_sound_correspondences".format(timestamp=now)
 
-    """options for sound classes:
-    1. Keep original BIPA symbols. Very precise, but variations in annotation make the results noisy.
-    2. Coarsen BIPA to keep only some main features. This tries to strike a balance between BIPA and avoiding noise.
-    """
-    if args.model == "BIPA":
-        def to_sound_class(sound):
-            return str(clts.bipa[sound])
+    coarse = Coarsen(clts.bipa, "src/lexitools/commands/default_coarsening.csv")
 
-        def sound_features(sound):
-            return clts.bipa[sound].featureset
-
-    elif args.model == "Coarse":
-        coarse = Coarsen(clts.bipa, "src/lexitools/commands/default_coarsening.csv")
-
-        def to_sound_class(sound):
-            return coarse[sound]
-
-        def sound_features(sound):
-            return coarse.features.get(sound, {})
-    else:
-        raise ValueError("Incorrect sound class model")
 
     ## This is a temporary fake "lexicore" interface
     dataset_list = LEXICORE if args.dataset == "lexicore" else [args.dataset.split("/")]
     db = MockLexicore(dataset_list)
 
     data = SoundCorrespsByGenera(db, langgenera_path,
-                                 sound_class=to_sound_class,
+                                 coarsen=coarse,
                                  concept_list=args.concepts,
                                  glottolog=pyglottolog.Glottolog(
                                      args.glottolog.dir))
@@ -831,10 +731,7 @@ def run(args):
             len(data.concepts_subset)))
 
     corresp_finder = Correspondences(args, data, clts,
-                                     features_func=sound_features,
                                      eval_cognates=args.cognate_eval)
-
-    available = corresp_finder.find_available()
 
     # with cProfile.Profile() as pr:
     corresp_finder.find_attested_corresps()
@@ -892,13 +789,7 @@ def run(args):
             writer.writerow([genus, infos["min_mutual_coverage"], infos["average_coverage"],
                               infos["lexstat_params"]])
 
-    with open(output_prefix + '_available.csv', 'w', encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["family", "genus", "sound_a", "sound_B"])
-        writer.writerows(available)
-
     metadata_dict = {"observation cutoff": args.cutoff,
-                     "model": args.model,
                      "concepts": args.concepts,
                      "dataset": args.dataset}
     dataset_str = sorted(a + "/" + b for a, b in dataset_list)

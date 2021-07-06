@@ -114,6 +114,7 @@ class Coarsen(object):
         self.features = {}  #  coarse string -> coarse feature set
         self.cache = {}  # bipa string -> coarse string
         self.silent_errors = False # By default, throw on unknown clts sound
+        self.categories = {}
 
         # Construct a dict of coarse feature set -> all listed bipa sounds resulting in this set
         sounds = defaultdict(list)
@@ -135,6 +136,42 @@ class Coarsen(object):
             self.features[str(name)] = f
             for s in sounds[f]:
                 self.cache[str(s)] = str(name)  # Instead, first try for the name
+
+    def _category(self, sound):
+        s = self[sound]
+        feats = dict(self.features[s])
+        cat = feats["category"]
+
+        # tones
+        if cat == "tone":
+            return cat
+
+        # vowels
+        if cat in {"vowel", "diphthong"}:
+            self.categories[sound] = "V"
+            return self.categories[sound]
+
+        # nasals
+        if feats["manner"] == "nasal":
+            self.categories[sound] = "N"
+            return self.categories[sound]
+
+        # liquids
+        elif feats["manner"] == "vibrant" \
+                or "lateral" in feats["manner"] \
+            or {"manner":"approximant", "place":"anterior"} < feats:
+            self.categories[sound] = "L"
+            return self.categories[sound]
+
+        # obstruents
+        self.categories[sound] = "O"
+        return self.categories[sound]
+
+    def category(self, sound):
+        try:
+            return self.categories[sound]
+        except:
+            return self._category(sound)
 
     def _parse_config(self, config_path):
         """ Parse a configuration table to generate coarse rules per category.

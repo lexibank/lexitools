@@ -11,22 +11,20 @@ from cldfcatalog import Config
 
 import lingpy
 import lingpy.evaluate
-from lingpy.compare.util import mutual_coverage_check, mutual_coverage_subset
+from lingpy.compare import partial
+from lingpy.compare.util import mutual_coverage_check
 from lingpy.compare.sanity import average_coverage
-from itertools import combinations
 from collections import Counter, defaultdict
 from pylexibank import progressbar
 import pyglottolog
 import csv
-import csvw
-import time
 import subprocess
 from importlib.util import find_spec
 from cldfbench import get_dataset
 import sys
 import json
 from lexitools.coarse_soundclass import Coarsen
-
+import time
 import logging
 
 # Do not merge consecutive vowels into diphthongs
@@ -35,12 +33,12 @@ lingpy.settings.rcParams["merge_vowels"] = False
 # import cProfile
 
 LEXICORE = [
-     # ('lexibank', 'aaleykusunda'),
-     # ('lexibank', 'abrahammonpa'),
-     ('lexibank', 'allenbai'),
-     # ('lexibank', 'bdpa'),
+    # ('lexibank', 'aaleykusunda'),
+    # ('lexibank', 'abrahammonpa'),
+    ('lexibank', 'allenbai'),
+    # ('lexibank', 'bdpa'),
     # ('lexibank', 'beidasinitic'),
-    ('lexibank', 'birchallchapacuran'),
+    # ('lexibank', 'birchallchapacuran'),
     # ('sequencecomparison', 'blustaustronesian'),
     # ('lexibank', 'bodtkhobwa'), ('lexibank', 'bowernpny'),
     # ('lexibank', 'cals'), ('lexibank', 'castrosui'),
@@ -65,7 +63,8 @@ LEXICORE = [
     # ('lexibank', 'naganorgyalrongic'), ('lexibank', 'northeuralex'),
     # ('lexibank', 'peirosaustroasiatic'),
     # ('lexibank', 'pharaocoracholaztecan'), ('lexibank', 'robinsonap'),
-    # ('lexibank', 'sagartst'), ('lexibank', 'savelyevturkic'),
+    ('lexibank', 'sagartst'),
+    # ('lexibank', 'savelyevturkic'),
     # ('lexibank', 'sohartmannchin'),
     # ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
     # ('lexibank', 'transnewguineaorg'), ('lexibank', 'tryonsolomon'),
@@ -246,6 +245,7 @@ class Sound(metaclass=FlyWeight):
     left_context: str
     right_context: str
 
+
 def wordlist_subset(lex, f):
     out = {}
     for i, row in lex._data.items():
@@ -254,6 +254,7 @@ def wordlist_subset(lex, f):
         if f(i, row):
             out[i] = row
     return out
+
 
 class CognateFinder(object):
     """ Loads lexibank data, organized by families, to facilitate the counting of correspondences.
@@ -373,7 +374,8 @@ class CognateFinder(object):
             langoid = langoids.get(gcode, None)
             if langoid is not None and langoid.family is not None:
                 family = langoid.family.name
-            languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=row["Name"]) #TODO: should we use the langoid name here ?
+            languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=row[
+                "Name"])  # TODO: should we use the langoid name here ?
         return languages
 
     def __getitem__(self, args):
@@ -389,6 +391,7 @@ class CognateFinder(object):
                 if mutual_coverage_check(lex, i):
                     return i
             return 0
+
         d = {"min_mutual_coverage": mut_cov(),
              "average_coverage": average_coverage(lex)}
         return d
@@ -397,27 +400,59 @@ class CognateFinder(object):
         lingpy.log.get_logger().setLevel(logging.WARNING)
         pbar = progressbar(self._data, desc="looking for cognates...")
         eval_measures = ["precision", "recall", "f-score"]
+
         for family in pbar:
-            pbar.set_description("looking for cognates in family %s" % family)
-            lex = lingpy.LexStat(self._data[family], check=True)
 
+            # Define the current list of cognate ids (if any)
+            # Decide whether we need partial or wholistic cognate detection
+            cogids = Counter()
+            segmented = False
+            for i, row in self._data[family].items():
+                cogid = row[self.cols["cogid"]]
+                if cogid is not None and "-" in cogid:
+                    segmented = True
+                if "+" in row[self.cols["tokens"]]:
+                    segmented = True
+                cogids[cogid] += 1
 
-            self.stats[family] = self.sanity_stats(lex)
+            if segmented:  # Cognates and alignments are morpheme-level
+                lex = partial.Partial(self._data[family], check=True)
+                pbar.set_description(
+                    "looking for partial cognates in family %s (%s rows without gold cogids)" % (
+                    family, cogids[None]))
+                self.stats[family] = {"detection-type": 'partial'}
 
-            kw = dict(method='lexstat', threshold=0.55, ref="pred_cogid",
-                      cluster_method='infomap')
-            if self.stats[family]["average_coverage"] < .80 \
-                    or self.stats[family]["min_mutual_coverage"] < 100:
-                kw = dict(method="sca", threshold=0.45, ref='pred_cogid')
-            self.stats[family]["lexstat_params"] = " ".join("=".join([k, str(v)]) for k, v in kw.items())
+            else:  # Cognates and alignments are word-level
+                lex = lingpy.LexStat(self._data[family], check=True)
+                self.stats[family] = {"detection-type": 'LexStat'}
 
+            self.stats[family].update(self.sanity_stats(lex))
 
-            lex.get_scorer(runs=100)
-            lex.cluster(**kw)
+            # prediction needed when we don't have all cogids, or when evaluating
+            if None in cogids or eval:
+                # Decide which algorithm to run
+                kw = dict(method='lexstat', threshold=0.55, ref="pred_cogid",
+                          cluster_method='infomap')
+                if self.stats[family]["average_coverage"] < .80 \
+                        or self.stats[family]["min_mutual_coverage"] < 100:
+                    kw = dict(method="sca", threshold=0.45, ref='pred_cogid')
+                self.stats[family]["lexstat_params"] = " ".join(
+                    "=".join([k, str(v)]) for k, v in kw.items())
 
-            ## here create a new column based on pred and gold cogids ?
+                # Run cognate detection
 
-            alm = lingpy.Alignments(lex, ref="pred_cogid")
+                lex.get_scorer(runs=100)
+
+                if segmented:
+                    lex.partial_cluster(**kw)
+                else:
+                    lex.cluster(**kw)
+            else:
+                # no prediction, just copy gold
+                lex.add_entries("pred_cogid", "cogid", lambda x: x)
+
+            ## Align and yield pairs of rows and alignments
+            alm = lingpy.Alignments(lex, ref="pred_cogid", fuzzy=segmented)
             alm.align(method='progressive', scoredict=lex.cscorer)
 
             for cognate_idx in alm.etd["pred_cogid"]:
@@ -428,6 +463,7 @@ class CognateFinder(object):
                 alignments = [alm[i, "alignment"] for i in cognateset]
                 yield rows, alignments
 
+            ## Evaluate cognate detection
             if eval:
                 # separate data by dataset, keep only if gold annotation exists
                 columns = lex.columns
@@ -442,12 +478,20 @@ class CognateFinder(object):
                     pbar.set_description("evaluating against gold rows in %s" % dataset)
                     gold_rows = dict(enumerate(by_datasets[dataset]))
                     lex = lingpy.LexStat(gold_rows)
-                    d = dict(zip(eval_measures,
-                                 lingpy.evaluate.acd.bcubes(lex, gold='cogid',
-                                 test='pred_cogid',pprint=False)))
+                    this_segmented = any("-" in cogid for i, cogid in lex.iter_rows("cogid"))
+
+                    if segmented and this_segmented:
+                        res = lingpy.evaluate.acd.partial_bcubes(lex, gold='cogid',
+                                                                 test='pred_cogid',
+                                                                 pprint=False)
+                    else:
+                        res = lingpy.evaluate.acd.bcubes(lex, gold='cogid',
+                                                         test='pred_cogid',
+                                                         pprint=False)
+                    d = dict(zip(eval_measures, res))
                     d.update(self.sanity_stats(lex))
                     d["lexstat_params"] = self.stats[family]["lexstat_params"]
-                    self.evals[(family,dataset)] = d
+                    self.evals[(family, dataset)] = d
 
     def _iter_phonemes(self, row):
         """ Iterate over pre-processed phonemes from a row's token.
@@ -470,15 +514,19 @@ class CognateFinder(object):
         # which means that tokens are not phonemes (ex:bodtkhobwa)
         # This is solved by re-tokenizing on the space...
         tokens = " ".join([s for s in segments if (s is not None and s != "")]).split(" ")
-        for segment in tokens:
+        for i, segment in enumerate(tokens):
             try:
                 if "/" in segment:
                     segment = segment.split("/")[1]
-                yield self.coarsen[segment]
+                segment = self.coarsen[segment]
+                if i == 0 and segment == "+":  # ignore initial "+"
+                    continue
+                yield segment
             except ValueError as e:
                 self.errors.append((row["dataset"], row["Language_ID"], segment,
                                     " ".join(str(x) for x in segments), row["ID"]))
                 raise e
+
 
 def register(parser):
     # Standard catalogs can be "requested" as follows:
@@ -564,6 +612,7 @@ class Correspondences(object):
 
         Yields: pair of aligned sounds and their contexts: `(sound, context)`
         """
+
         def to_categories(sequence):
             """Turn a sequence of sounds into a sequence of categories used in contexts"""
             for s in sequence:
@@ -623,18 +672,20 @@ class Correspondences(object):
                 sounds, contexts = zip(*sounds_and_contexts)
                 sounds = [Sound(lang=langs[i], sound=sounds[i],
                                 left_context=contexts[i][0], right_context=contexts[i][1])
-                               for i in range(l)]
-                event = tuple(sorted(sounds, key=lambda s:s.lang.glottocode))
+                          for i in range(l)]
+                event = tuple(sorted(sounds, key=lambda s: s.lang.glottocode))
                 self.counts[event] += 1
 
-                event_in_dataset = frozenset({(sounds[i],words[i]["cldf_dataset"])
+                event_in_dataset = frozenset({(sounds[i], words[i]["cldf_dataset"])
                                               for i in range(l)})
 
                 if len(self.examples[event]) < 5 and \
                         exs_counts[event_in_dataset] < 2:
                     exs_counts[event_in_dataset] += 1
-                    examples = [format_ex(w) for w in sorted(words, key=lambda w:w["glottocode"])]
+                    examples = [format_ex(w) for w in
+                                sorted(words, key=lambda w: w["glottocode"])]
                     self.examples[event].append(examples)
+
 
 def run(args):
     """Run the correspondence command.
@@ -668,7 +719,6 @@ def run(args):
 
     coarse = Coarsen(clts.bipa, "src/lexitools/commands/default_coarsening.csv")
 
-
     ## This is a temporary fake "lexicore" interface
     dataset_list = LEXICORE if args.dataset == "lexicore" else [args.dataset.split("/")]
     db = MockLexicore(dataset_list)
@@ -689,17 +739,17 @@ def run(args):
 
     # pr.dump_stats("profile.prof")
 
-
     with open(output_prefix + '_coarsening.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
         writer.writerows(coarse.as_table())
 
     with open(output_prefix + '_counts.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["family", "col_id",  "count",  "left_context","sound","right_context",
-                         "language", "glottocode", "examples"])
+        writer.writerow(
+            ["family", "col_id", "count", "left_context", "sound", "right_context",
+             "language", "glottocode", "examples"])
         for i, sounds in enumerate(corresp_finder.counts):
-            col_id = sounds[0].lang.family+"-"+str(i)
+            col_id = sounds[0].lang.family + "-" + str(i)
             count = corresp_finder.counts[sounds]
             examples = corresp_finder.examples[sounds]
 
@@ -719,11 +769,13 @@ def run(args):
 
     with open(output_prefix + '_cognate_info.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(["family", "min_mutual_coverage", "average_coverage","lexstat_params"])
+        writer.writerow(
+            ["family", "min_mutual_coverage", "average_coverage", "lexstat_params"])
         for family in corresp_finder.data.stats:
             infos = corresp_finder.data.stats[family]
-            writer.writerow([family, infos["min_mutual_coverage"], infos["average_coverage"],
-                              infos["lexstat_params"]])
+            writer.writerow(
+                [family, infos["min_mutual_coverage"], infos["average_coverage"],
+                 infos["lexstat_params"]])
 
     metadata_dict = {"concepts": args.concepts,
                      "dataset": args.dataset}
@@ -732,11 +784,12 @@ def run(args):
     # metadata_dict["n_languages"] = len(data.lang_to_concept)
     metadata_dict["n_families"] = len(data._data)
     metadata_dict["n_concepts"] = len(data.concepts_subset)
-    metadata_dict["n_tokens"] = sum([len(data._data[f])-1 for f in data._data])
+    metadata_dict["n_tokens"] = sum([len(data._data[f]) - 1 for f in data._data])
 
     # TODO: update cognate eval
     for family, dataset in corresp_finder.data.evals:
-        metadata_dict["eval_{}_{}".format(family,dataset)] = corresp_finder.data.evals[(family, dataset)]
+        metadata_dict["eval_{}_{}".format(family, dataset)] = corresp_finder.data.evals[
+            (family, dataset)]
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:

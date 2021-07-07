@@ -11,11 +11,14 @@ import csvw
 COMPOSITE = (pyclts.models.Diphthong, pyclts.models.Cluster)
 CATEGORIES = {"consonant", "vowel", "cluster", "diphthong", "tone"}
 
+
 @dataclass
 class Rule():
     """ Abstract class for a coarsening rule """
+
     def apply(self, featureset):
         raise NotImplementedError()
+
 
 @dataclass
 class ChangeRule(Rule):
@@ -35,6 +38,8 @@ class ChangeRule(Rule):
                         featureset.remove((f2, v2))
                 # Make the modification
                 featureset.add((f, v))
+
+
 @dataclass
 class RemovalRule(Rule):
     """ Represents a removal coarsening rule.
@@ -48,7 +53,6 @@ class RemovalRule(Rule):
         for (f, v) in list(featureset):
             if f == self.feature:
                 featureset.remove((f, v))
-
 
 
 class Coarsen(object):
@@ -111,9 +115,9 @@ class Coarsen(object):
         self.bipa = bipa
         self.rules = self._parse_config(config_path)
         self.labels = {}  # coarse feature set -> coarse string
-        self.features = {}  #  coarse string -> coarse feature set
+        self.features = {}  # coarse string -> coarse feature set
         self.cache = {}  # bipa string -> coarse string
-        self.silent_errors = False # By default, throw on unknown clts sound
+        self.silent_errors = False  # By default, throw on unknown clts sound
         self.categories = {}
 
         # Construct a dict of coarse feature set -> all listed bipa sounds resulting in this set
@@ -165,10 +169,18 @@ class Coarsen(object):
             return self.categories[sound]
 
         # liquids
-        manner = dict(feats)["manner"]
-        if manner == "vibrant" or "lateral" in manner \
-            or {("manner","approximant"), ("place","anterior")} < feats:
+        d = dict(feats)
+        manner = d["manner"]
+        place = d["place"]
+        if manner == "vibrant" or manner == "lateral-fricative" \
+                or manner == "approximant" and (
+                place in {"anterior", "retroflex", "labial"}):
             self.categories[sound] = "L"
+            return self.categories[sound]
+
+        # all remaining approximants are glides
+        if manner == "approximant":
+            self.categories[sound] = "G"
             return self.categories[sound]
 
         # obstruents
@@ -191,17 +203,18 @@ class Coarsen(object):
             dict of categories to list of Rules
         """
         ANY = "#ANY#"
+
         def parse_features(feature_value_str):
             # ex: f=v&f2=v2
-            if feature_value_str == "": ## empty set, used to remove features
+            if feature_value_str == "":  ## empty set, used to remove features
                 return
             for fv in feature_value_str.split("&"):
-                f,v = fv.split("=")
+                f, v = fv.split("=")
                 if v == "None":
                     v = None
                 if v == "":
                     v = ANY
-                yield f,v
+                yield f, v
 
         config = {}
         with csvw.UnicodeDictReader(config_path, delimiter=",") as reader:
@@ -213,13 +226,13 @@ class Coarsen(object):
                 conditions = list(parse_features(row["CONDITIONS"]))
                 # Removal rule
                 if len(conditions) == 1 \
-                    and conditions[0][1] == ANY \
-                    and row["MODIFICATION"] == "":
+                        and conditions[0][1] == ANY \
+                        and row["MODIFICATION"] == "":
                     rule = RemovalRule(feature=conditions[0][0])
                 else:
                     modification = frozenset(parse_features(row["MODIFICATION"]))
                     rule = ChangeRule(conditions=frozenset(conditions),
-                                  modification=modification)
+                                      modification=modification)
                 config[cat].append(rule)
 
         return config
@@ -248,23 +261,27 @@ class Coarsen(object):
         Returns: a bipa sound which should serve as an alias for this feature set.
         """
         # hard codes the preference for a prototypical narrow place
-        place_sort = {a:i for i,a in enumerate(["bilabial", "alveolar", "post-alveolar", "palatal"])}
+        place_sort = {a: i for i, a in
+                      enumerate(["bilabial", "alveolar", "post-alveolar", "palatal"])}
 
-        def jaccard(f1,f2):
+        def jaccard(f1, f2):
             return len(f1 & f2) / len(f1 | f2)
+
         freqs = Counter([char for s in sound_set for char in str(s)])
+
         def cmp(sound):
             string_length = len(str(sound))
             try:
                 place = sound.featuredict.get("place", None)
-                this_featureset =  {item for item in sound.featuredict.items() if item[1] is not None}
-                dist_to_coarse = -jaccard(features,this_featureset)
-            except AttributeError: # Markers don't have featuredicts
+                this_featureset = {item for item in sound.featuredict.items() if
+                                   item[1] is not None}
+                dist_to_coarse = -jaccard(features, this_featureset)
+            except AttributeError:  # Markers don't have featuredicts
                 dist_to_coarse = 1
                 place = None
             negfreq = -sum(freqs[c] for c in str(sound))
 
-            place_order = place_sort.get(place, len(place_sort)+1)
+            place_order = place_sort.get(place, len(place_sort) + 1)
             return (string_length, place_order, dist_to_coarse, negfreq)
 
         return min(sound_set, key=cmp)
@@ -296,7 +313,7 @@ class Coarsen(object):
             if isinstance(sound, pyclts.models.UnknownSound):
                 # Unknown CLTS sounds get their own coarse class
                 if self.silent_errors:
-                    coarse_sound =  item
+                    coarse_sound = item
                     fs = frozenset({("unknownSound", str(item))})
                     self.labels[fs] = item
                     self.features[item] = fs
@@ -312,7 +329,7 @@ class Coarsen(object):
                 else:
                     coarse_sound = sa + sb
                     fa, fb = self.features[sa], self.features[sb]
-                    self.features[coarse_sound] = (fa, fb) # for similarity computation
+                    self.features[coarse_sound] = (fa, fb)  # for similarity computation
                     self.labels[(fa, fb)] = coarse_sound
             else:
                 coarse_sound = self.coarsen_sound(sound)
@@ -358,10 +375,10 @@ class Coarsen(object):
         except AttributeError:
             # markers do not have featuredicts in CLTS
             features = {("marker", str(sound))}
-        for rule in self.rules.get(cat,[]):
+        for rule in self.rules.get(cat, []):
             rule.apply(features)
         features.add(("category", cat))
-        features = frozenset({(f,v) for f,v in features if v is not None})
+        features = frozenset({(f, v) for f, v in features if v is not None})
         return features
 
     def as_table(self):

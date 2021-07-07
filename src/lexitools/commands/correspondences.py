@@ -670,6 +670,10 @@ class Correspondences(object):
 
             for sounds_and_contexts in columns:
                 sounds, contexts = zip(*sounds_and_contexts)
+
+                # Only markers
+                if set(sounds) in {{"-"}, {"+"}}: continue
+
                 sounds = [Sound(lang=langs[i], sound=sounds[i],
                                 left_context=contexts[i][0], right_context=contexts[i][1])
                           for i in range(l)]

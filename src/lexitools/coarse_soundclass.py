@@ -172,7 +172,7 @@ class Coarsen(object):
         d = dict(feats)
         manner = d["manner"]
         place = d["place"]
-        if manner == "vibrant" or manner == "lateral-fricative" \
+        if manner == "vibrant" or manner == "lateral-approximant" \
                 or manner == "approximant" and (
                 place in {"anterior", "retroflex", "labial"}):
             self.categories[sound] = "L"

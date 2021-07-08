@@ -26,6 +26,7 @@ import json
 from lexitools.coarse_soundclass import Coarsen
 import time
 import logging
+from itertools import groupby
 
 # Do not merge consecutive vowels into diphthongs
 lingpy.settings.rcParams["merge_vowels"] = False
@@ -36,6 +37,8 @@ LEXICORE = [
     # ('lexibank', 'aaleykusunda'),
     # ('lexibank', 'abrahammonpa'),
     ('lexibank', 'allenbai'),
+    ('lexibank', 'sagartst'),
+    ('lexibank', 'starostinkaren'),
     # ('lexibank', 'bdpa'),
     # ('lexibank', 'beidasinitic'),
     # ('lexibank', 'birchallchapacuran'),
@@ -63,7 +66,6 @@ LEXICORE = [
     # ('lexibank', 'naganorgyalrongic'), ('lexibank', 'northeuralex'),
     # ('lexibank', 'peirosaustroasiatic'),
     # ('lexibank', 'pharaocoracholaztecan'), ('lexibank', 'robinsonap'),
-    ('lexibank', 'sagartst'),
     # ('lexibank', 'savelyevturkic'),
     # ('lexibank', 'sohartmannchin'),
     # ('sequencecomparison', 'starostinpie'), ('lexibank', 'suntb'),
@@ -84,7 +86,6 @@ LEXICORE = [
     # ('lexibank', 'polyglottaafricana'),
     # ('lexibank', 'simsrma'),
     # ('lexibank', 'starostinhmongmien'),
-    ('lexibank', 'starostinkaren'),
     # ('lexibank', 'tppsr'),
     # ('lexibank', 'vanbikkukichin'),
     # ('lexibank', 'wangbai'),
@@ -409,8 +410,6 @@ class CognateFinder(object):
             segmented = False
             for i, row in self._data[family].items():
                 cogid = row[self.cols["cogid"]]
-                if cogid is not None and "-" in cogid:
-                    segmented = True
                 if "+" in row[self.cols["tokens"]]:
                     segmented = True
                 cogids[cogid] += 1
@@ -429,39 +428,30 @@ class CognateFinder(object):
             self.stats[family].update(self.sanity_stats(lex))
 
             # prediction needed when we don't have all cogids, or when evaluating
-            if None in cogids or eval:
-                # Decide which algorithm to run
-                kw = dict(method='lexstat', threshold=0.55, ref="pred_cogid",
-                          cluster_method='infomap')
-                if self.stats[family]["average_coverage"] < .80 \
-                        or self.stats[family]["min_mutual_coverage"] < 100:
-                    kw = dict(method="sca", threshold=0.45, ref='pred_cogid')
-                self.stats[family]["lexstat_params"] = " ".join(
-                    "=".join([k, str(v)]) for k, v in kw.items())
+            # if None in cogids or eval:
+            # Decide which algorithm to run
+            kw = dict(method='lexstat', threshold=0.55, ref="pred_cogid",
+                      cluster_method='infomap')
 
-                # Run cognate detection
+            if self.stats[family]["average_coverage"] < .80 \
+                    or self.stats[family]["min_mutual_coverage"] < 100:
+                kw = dict(method="sca", threshold=0.45, ref='pred_cogid')
+            self.stats[family]["lexstat_params"] = " ".join(
+                "=".join([k, str(v)]) for k, v in kw.items())
 
-                lex.get_scorer(runs=100)
+            # Run cognate detection
 
-                if segmented:
-                    lex.partial_cluster(**kw)
-                else:
-                    lex.cluster(**kw)
+            lex.get_scorer(runs=100)
+
+            if segmented:
+                lex.partial_cluster(**kw)
             else:
-                # no prediction, just copy gold
-                lex.add_entries("pred_cogid", "cogid", lambda x: x)
+                lex.cluster(**kw)
+            # else:
+            #     # no prediction, just copy gold
+            #     align_kw = dict(method = 'progressive')
+            #     lex.add_entries("pred_cogid", "cogid", lambda x: [int(i) for i in x.split("-")])
 
-            ## Align and yield pairs of rows and alignments
-            alm = lingpy.Alignments(lex, ref="pred_cogid", fuzzy=segmented)
-            alm.align(method='progressive', scoredict=lex.cscorer)
-
-            for cognate_idx in alm.etd["pred_cogid"]:
-                # list concatenation of the cognate indexes
-                cognateset = sum(
-                    [x for x in alm.etd["pred_cogid"][cognate_idx] if x != 0], [])
-                rows = self[family, cognateset]
-                alignments = [alm[i, "alignment"] for i in cognateset]
-                yield rows, alignments
 
             ## Evaluate cognate detection
             if eval:
@@ -477,21 +467,74 @@ class CognateFinder(object):
                 for dataset in by_datasets:
                     pbar.set_description("evaluating against gold rows in %s" % dataset)
                     gold_rows = dict(enumerate(by_datasets[dataset]))
-                    lex = lingpy.LexStat(gold_rows)
-                    this_segmented = any("-" in cogid for i, cogid in lex.iter_rows("cogid"))
+                    eval_lex = lingpy.LexStat(gold_rows)
+                    this_segmented = any("-" in cogid for i, cogid in eval_lex.iter_rows("cogid"))
 
                     if segmented and this_segmented:
-                        res = lingpy.evaluate.acd.partial_bcubes(lex, gold='cogid',
+                        res = lingpy.evaluate.acd.partial_bcubes(eval_lex, gold='cogid',
                                                                  test='pred_cogid',
                                                                  pprint=False)
                     else:
-                        res = lingpy.evaluate.acd.bcubes(lex, gold='cogid',
+                        res = lingpy.evaluate.acd.bcubes(eval_lex, gold='cogid',
                                                          test='pred_cogid',
                                                          pprint=False)
                     d = dict(zip(eval_measures, res))
-                    d.update(self.sanity_stats(lex))
+                    d.update(self.sanity_stats(eval_lex))
                     d["lexstat_params"] = self.stats[family]["lexstat_params"]
                     self.evals[(family, dataset)] = d
+
+            ## Align and yield pairs of rows and alignments
+            if segmented:
+                # We don't want fuzzy alignments, we want independent alignments of morphemes
+                # Because we want gaps to mean "deletion"/"insertion"
+                # The workaround is to have rows for morphemes instead of tokens when segmentable
+                # Note: this will result in a lot of duplication, so we keep a single
+                # entry for each combination of morpheme, predicted cogid, and language.
+
+                # (language, concept, morpheme, id): row
+                rows = {}
+                tok = self.cols["tokens"]
+                lg = self.cols["doculect"]
+                cog = len(self.cols)
+                columns = list(self.cols)+["pred_cogid"]
+                for i, *r in lex.iter_rows(*columns):
+                    tokens = r[tok]
+                    lang = r[lg]
+                    pred_ids =  r[cog]
+
+                    if type(pred_ids) is list and "+" in tokens:
+                        morphemes = [list(s) for is_plus,s in groupby(tokens,lambda x:x=='+') if not is_plus]
+                        if len(morphemes) == len(pred_ids):
+                            # make a separate row for each morpheme
+                            for morph, pred_subid in zip(morphemes, pred_ids):
+                                new_row = list(r)
+                                new_row[tok] = morph
+                                new_row[cog] = pred_subid
+                                rows[(lang, " ".join(morph), pred_subid)] = new_row
+                        else:
+                            r[cog] = pred_ids[0]
+                            rows[(lang, " ".join(tokens), pred_ids[0])] = r
+                    else:
+                        r[cog] = pred_ids[0]
+                        rows[(lang, " ".join(tokens), pred_ids[0])] = r
+
+                lex = lingpy.LexStat(dict(enumerate([columns] + list(rows.values())))) # has less info and no scorer.
+
+            alm = lingpy.Alignments(lex, ref="pred_cogid")
+            align_kw = dict(method = 'progressive')
+            alm.align(**align_kw)
+
+            columns = list(alm.columns)
+            for cognate_idx in alm.etd["pred_cogid"]:
+                # list concatenation of the cognate indexes
+                row_ids = sum(
+                    [x for x in alm.etd["pred_cogid"][cognate_idx] if x != 0], [])
+                rows = [dict(zip(columns, alm[i])) for i in row_ids]
+                alignments = [alm[i, "alignment"] for i in row_ids]
+
+
+                yield rows, alignments
+
 
     def _iter_phonemes(self, row):
         """ Iterate over pre-processed phonemes from a row's token.
@@ -514,12 +557,13 @@ class CognateFinder(object):
         # which means that tokens are not phonemes (ex:bodtkhobwa)
         # This is solved by re-tokenizing on the space...
         tokens = " ".join([s for s in segments if (s is not None and s != "")]).split(" ")
+        l = len(tokens)
         for i, segment in enumerate(tokens):
             try:
                 if "/" in segment:
                     segment = segment.split("/")[1]
                 segment = self.coarsen[segment]
-                if i == 0 and segment == "+":  # ignore initial "+"
+                if (i == 0 or i ==l-1) and segment == "+":  # ignore initial and final "+"
                     continue
                 yield segment
             except ValueError as e:
@@ -672,7 +716,7 @@ class Correspondences(object):
                 sounds, contexts = zip(*sounds_and_contexts)
 
                 # Only markers
-                if set(sounds) in {{"-"}, {"+"}}: continue
+                if set(sounds) in ({"-"}, {"+"}): continue
 
                 sounds = [Sound(lang=langs[i], sound=sounds[i],
                                 left_context=contexts[i][0], right_context=contexts[i][1])

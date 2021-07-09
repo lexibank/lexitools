@@ -18,14 +18,12 @@ vowel,breathiness=,,
 vowel,glottalization=,,
 vowel,centrality=near-back,centrality=back,reduce centrality to three values
 vowel,centrality=near-front,centrality=front,reduce centrality to three values
-vowel,height=open&centrality=front,height=open&centrality=to-neutralize,neutralize centrality for [a]
-vowel,height=near-open&centrality=central,height=open&centrality=to-neutralize,neutralize centrality for [ɐ]
-vowel,height=open&centrality=back,height=open&centrality=to-neutralize,neutralize centrality for [ɑ]/[ɒ]
+vowel,height=open&roundedness=unrounded,height=open&centrality=non-front&roundedness=unrounded,neutralize centrality for [a]/[ɑ]
+vowel,height=near-open&centrality=central,height=open&centrality=non-front,neutralize centrality for [ɐ]
 vowel,height=near-close,height=close,reduce height to three values
 vowel,height=close-mid,height=mid,reduce height to three values
 vowel,height=open-mid,height=mid,reduce height to three values
 vowel,height=near-open,height=open,reduce height to three values
-vowel,height=open&centrality=to-neutralize,height=open,cleanup for neutralization of centrality in [a/ɑ/ɒ/ɐ]
 consonant,aspiration=aspirated&phonation=voiceless&place=dental&manner=affricate&laterality=None,aspiration=aspirated&phonation=voiceless&place=dental&manner=affricate&sibilancy=sibilant,this is a custom rule to correct the value of ts̪ʰ in CLTS v1.4.1. This rule is ordered
 consonant,aspiration=,,
 consonant,creakiness=,,

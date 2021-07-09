@@ -74,3 +74,6 @@ consonant,place=anterior&sibilancy=sibilant,place=sibilant-anterior,recategorize
 consonant,manner=fricative&laterality=lateral,manner=lateral-fricative,recategorize laterality as a subtype of manner
 consonant,manner=affricate&laterality=lateral,manner=lateral-affricate,recategorize laterality as a subtype of manner
 consonant,manner=approximant&laterality=lateral,manner=lateral-approximant,recategorize laterality as a subtype of manner
+marker,marker=→,marker=+,all morpheme boundaries annotated as +
+marker,marker=_,marker=+,all morpheme boundaries annotated as +
+marker,marker=←,marker=+,all morpheme boundaries annotated as +

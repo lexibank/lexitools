@@ -267,9 +267,6 @@ class CognateFinder(object):
         self.stats = {}
         self.prefix = prefix
 
-        # dict of family -> lingpy internal Wordlist dict
-        self._data = defaultdict(lambda: [namespace])
-
         self.coarsen = coarsen
         #
         # Obtain glottocode and family:
@@ -293,13 +290,14 @@ class CognateFinder(object):
         else:  # All observed concepts
             self.concepts_subset = {i for i, j in concepts.values()}
 
-        # We need to convert all cogids to ints, and often they're unfortunately strings
-        cog_to_int = {}
-        next_cogid = 1
+        # dict of family -> (language, concept, word) -> row
+        self._data = defaultdict(lambda: [namespace])
+        self.cogids = defaultdict(set)
+
+        duplicates = Counter()
 
         for row in progressbar(db.iter_table('FormTable'),
-                                    desc="Loading data..."):
-
+                               desc="Loading data..."):
 
             # Ignore loan words
             if row.get("Loan", ""): continue
@@ -321,44 +319,74 @@ class CognateFinder(object):
                 continue  # unknown sounds
             if all([s in IGNORE for s in tokens]): continue
 
-            language = self.languages[row["Language_ID"]]
+            doculect = row["Language_ID"]
+            lang = self.languages[doculect]
             dataset = row["dataset"]
 
             cogid = row.get("Cognacy", row.get("Cognateset_ID", None))
-            if cogid in {"0", 0}:
-                # it looks like 0 is a null value, si sagartst !
-                cogid = None
-            elif type(cogid) is str and " " in cogid:
-                cogids = []
-                for i in cogid.split(" "):
-                    if (dataset, i) in cog_to_int:
-                        cogids.append(cog_to_int[(dataset, i)])
-                    else:
-                        cog_to_int[(dataset, i)] = i
-                        cogids.append(cog_to_int[(dataset, i)])
-                        next_cogid += 1
-                cogid = cogids
-            elif (dataset, cogid) in cog_to_int:
-                cogid = cog_to_int[(dataset, cogid)]
-            else:
-                cog_to_int[(dataset, cogid)] = next_cogid
-                cogid = cog_to_int[(dataset, cogid)]
-                next_cogid += 1
 
-            # Build internal dataset per family
-            self._data[language.family].append([
-                row["Language_ID"],  # doculect
-                concept_gloss,
-                concept_id,
-                " ".join(row["Segments"]),
-                row["ID"],
-                tokens,
-                language.glottocode,
-                cogid,
-                dataset])
+            self.cogids[(lang.family, dataset)].add(cogid)
+
+            # skip any duplicates.
+            ipa_word = tuple(tokens)
+            if duplicates[(doculect, concept_id, ipa_word)] > 0: continue
+
+            duplicates[(doculect, concept_id, ipa_word)] += 1
+
+            # add row
+            self._data[lang.family].append([doculect, concept_gloss, concept_id,
+                                            " ".join(row["Segments"]), row["ID"], tokens,
+                                            lang.glottocode, cogid, dataset])
 
         # lingpy wordlist internal format
-        self._data = {f:dict(enumerate(self._data[f])) for f in self._data}
+        self._data = {f: dict(enumerate(self._data[f])) for f in self._data}
+        self.prepare_cogids()
+
+    def prepare_cogids(self):
+        # We need to convert all cogids to ints, and often they're unfortunately strings
+        cog_to_int = {}
+        next_cogid = 1
+
+        def single_cogid(dataset, cogid):
+            nonlocal next_cogid
+            if (dataset, cogid) not in cog_to_int:
+                cog_to_int[(dataset, cogid)] = next_cogid
+                next_cogid += 1
+            return cog_to_int[(dataset, cogid)]
+
+        def multiple_cogids(dataset, cogids):
+            return tuple(single_cogid(dataset, x) for x in cogids)
+
+        # For each dataset, determine whether cogids are lists or ints
+        partial = {}
+        for family, dataset in self.cogids:
+            partial[dataset] = any(c is not None and " " in c for c in self.cogids[(family, dataset)])
+
+
+        # Convert cogids to either ints or lists of ints
+        c = self.cols["cogid"]
+        t = self.cols["original_token"]
+        d = self.cols["cldf_dataset"]
+        for family in self._data:
+            for i, row in self._data[family].items():
+                if i > 0:
+                    cogid = row[c]
+                    dataset = row[d]
+                    if cogid in {"0", 0, None, ""}:
+                        row[c] = None
+                    elif partial[dataset]:
+                        cogids = cogid.split(" ")
+                        morphemes = row[t].split(" + ")
+                        if len(cogids) != len(morphemes):
+                            # Sometimes, I find a single cogid with a word which has multiple morphemes
+                            # I think this happens because of words which have multiple
+                            # morphemes but have no cognates in the dataset.
+                            row[c] = tuple(single_cogid(dataset, cogid) for _ in range(len(morphemes)))
+                        else:
+                            row[c] = multiple_cogids(dataset, cogids)
+                    else:
+                        row[c] = single_cogid(dataset, cogid)
+
 
     def prepare_languages(self, db, glottolog):
         # this is less slow than calling .langoid(code) for each code
@@ -371,6 +399,9 @@ class CognateFinder(object):
             langoid = langoids.get(gcode, None)
             if langoid is not None and langoid.family is not None:
                 family = langoid.family.name
+            if family == "Isolate":
+                family = langoid.name + "_isolate"
+
             languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=row[
                 "Name"])  # TODO: should we use the langoid name here ?
         return languages
@@ -382,24 +413,27 @@ class CognateFinder(object):
                     return i
             return 0
 
-        d = {"min_mutual_coverage": mut_cov(),
-             "average_coverage": average_coverage(lex)}
+        d = {"min_mutual_coverage": mut_cov()}
+
+        try:
+            d["average_coverage"] = average_coverage(lex)
+        except ZeroDivisionError:
+            d["average_coverage"] = 0
         return d
 
     def _find_cognates(self, family, pbar, eval, segmented, needs_annotation,
                        gold_segmented):
         # Define the current list of cognate ids (if any)
         # Decide whether we need partial or wholistic cognate detection
-
-
         if segmented:  # Cognates and alignments are morpheme-level
             lex = partial.Partial(self._data[family], check=True)
         else:  # Cognates and alignments are word-level
             lex = lingpy.LexStat(self._data[family], check=True)
 
-        if lex.height == 0:
-            datasets = {r[self.cols["cldf_dataset"]] for r in self._data[family]}
-            print("Family %s has no usable data (datasets: {})".format(", ".join(datasets)))
+        if lex.height < 2 or lex.width < 2:
+            datasets = {r[self.cols["cldf_dataset"]] for i, r in self._data[family].items() if i>0}
+            print("Family %s has no usable data (datasets: %s)" % (
+                family, ", ".join(datasets)))
             return None
 
         # Clear some memory...
@@ -420,14 +454,14 @@ class CognateFinder(object):
             # Run cognate detection
             if segmented:
                 kw_str = ", ".join("=".join([k, str(v)]) for k, v in kw.items())
-                self.stats[family]["detection_type"]  = 'morpheme',
+                self.stats[family]["detection_type"] = 'morpheme',
                 self.stats[family]["cognate_source"] = "Partial(" + kw_str + ")"
                 pbar.set_description("looking for partial cognates in family %s" % family)
                 lex.get_scorer(runs=1000)
                 lex.partial_cluster(**kw)
             else:
                 kw_str = ", ".join("=".join([k, str(v)]) for k, v in kw.items())
-                self.stats[family]["detection_type"]  = 'word',
+                self.stats[family]["detection_type"] = 'word',
                 self.stats[family]["cognate_source"] = "LexStat(" + kw_str + ")"
                 pbar.set_description("looking for cognates in family %s" % family)
                 lex.get_scorer(runs=1000)
@@ -440,7 +474,8 @@ class CognateFinder(object):
 
         # Either we didn't predict, or we predicted only for evaluation purposes
         if not needs_annotation:
-            self.stats[family]["detection_type"] = 'morpheme' if gold_segmented else 'word'
+            self.stats[family][
+                "detection_type"] = 'morpheme' if gold_segmented else 'word'
             lex.add_entries("pred_cogid", "cogid", lambda x: x, override=True)
             self.stats[family]["cognate_source"] = "expert"
 
@@ -454,7 +489,8 @@ class CognateFinder(object):
         for i, r in lex._data.items():
             if i > 0 and r[lex._header['cogid']] is not None:
                 dataset = r[lex._header['cldf_dataset']]
-                by_datasets[dataset].append(list(r)) # copy of rows, otherwise we edit lex
+                by_datasets[dataset].append(
+                    list(r))  # copy of rows, otherwise we edit lex
 
         # Evaluate inside each dataset
         for dataset in progressbar(list(by_datasets),
@@ -463,11 +499,20 @@ class CognateFinder(object):
 
             eval_lex = lingpy.Wordlist(gold_rows)
 
+            if eval_lex.height < 2 or eval_lex.width < 2:
+                print(
+                    "Dataset %s in family %s has no usable eval data" % (dataset, family))
+                continue
+
             if segmented and gold_segmented:
                 # TODO: check that the format is indeed the expected format for partial cogids
                 res = lingpy.evaluate.acd.partial_bcubes(eval_lex, gold='cogid',
                                                          test='pred_cogid',
                                                          pprint=False)
+                # Diff won't work with lists, needs a tuple
+                eval_lex.add_entries("pred_cogid", "pred_cogid",
+                                     tuple,
+                                     override=True)
             else:
                 if segmented:  # revert to word-level cognates
                     eval_lex.add_entries("pred_cogid", "pred_cogid",
@@ -505,7 +550,7 @@ class CognateFinder(object):
                 cogid = row[self.cols["cogid"]]
                 if "+" in row[self.cols["tokens"]]:
                     segmented = True
-                if type(cogid) is list:
+                if type(cogid) is tuple:
                     gold_segmented = True
                 cogids_counts[cogid] += 1
             needs_annotation = None in cogids_counts
@@ -513,7 +558,7 @@ class CognateFinder(object):
             # Align cognates
             partial = (needs_annotation and segmented) or (gold_segmented)
             lex = self._find_cognates(family, pbar, eval, segmented,
-                                                        needs_annotation, gold_segmented)
+                                      needs_annotation, gold_segmented)
             if lex is None: continue
             alm = lingpy.Alignments(lex,
                                     ref="pred_cogid", fuzzy=partial)
@@ -531,7 +576,6 @@ class CognateFinder(object):
             for i, aligned in alm.get_msa("pred_cogid").items():
                 alignments = aligned['alignment']
                 rows = [dict(zip(cols, (alm[i, c] for c in cols))) for i in aligned["ID"]]
-
 
                 # docs_l = max([len(r["doculect"]) for r in rows])
                 # print("\n\n-------------------------------------------------------------"

@@ -4,4 +4,7 @@ pylexibank
 pyclts @ git+https://github.com/cldf-clts/pyclts.git#egg=pyclts
 linse @ git+https://github.com/lingpy/linse.git#egg=linse
 sinopy
+packaging==20.4
+Cartopy==0.19.0.post1
+lingrex
 lexibank_analysed @ git+https://github.com/lexibank/lexibank-analysed.git

@@ -414,23 +414,24 @@ class CorrespFinder(object):
         lingpy.log.get_logger().setLevel(logging.WARNING)
 
         # Find cognates
+        pbar.set_description(f"Searching for cognates in {self.family}", refresh=True)
         self._find_cognates(eval)
 
         # Align cognates
+        pbar.set_description(f"Aligning cognates in {self.family}", refresh=True)
         self.lex = lingpy.Alignments(self.lex, ref="pred_cogid", fuzzy=self.partial)
-
-        pbar.set_description(f"Aligning cognates in {self.family}")
         self.lex.align(method='library', iteration=True, model="sca", mode="global")
 
         # Override alignment to add contexts (no loss of info)
-        pbar.set_description(f"Adding contexts in {self.family}")
+        pbar.set_description(f"Adding contexts in {self.family}", refresh=True)
         msa = self.lex.msa["pred_cogid"]
         for cogid in msa:
             msa[cogid]["alignment"] = [list(self.add_contexts(seq)) for seq in
                                        msa[cogid]["alignment"]]
 
         # Consolidate alignment sites into patterns
-        pbar.set_description(f"Clustering alignment sites into patterns in {self.family}")
+        pbar.set_description(f"Clustering alignment sites into patterns in {self.family}",
+                             refresh=True)
         self.lex = lingrex.CoPaR(self.lex, ref="pred_cogid", fuzzy=self.partial,
                            segments="tokens", structure="structure")
         self.lex.get_sites()
@@ -438,7 +439,7 @@ class CorrespFinder(object):
 
         langs = self.lex.cols
 
-        pbar.set_description("Preparing corresp patterns in {family}")
+        pbar.set_description(f"Preparing corresp patterns in {self.family}", refresh=True)
         # Iterate over patterns
         for pat_idx, ((_, pattern), sites) in enumerate(self.lex.clusters.items()):
             # Unique identifier for this pattern
@@ -687,7 +688,7 @@ def run(args):
 
     Run with:
 
-        cldfbench lexitools.correspondences --clts-version v1.4.1 --dataset lexicore
+        cldfbench lexitools.correspondences --clts-version v1.4.1
 
     For details on the arguments, see `cldfbench lexitools.correspondences --help`.
 
@@ -740,6 +741,7 @@ def run(args):
     eval_stats = {}
     pbar = progressbar(data.families, desc="Searching for correspondences...")
     for family in pbar:
+        pbar.set_description(f"Initializing lexstat/partial for {family}" ,refresh=True)
         try:
             corresp_finder = CorrespFinder(family, data[family],
                                            data.cols,

@@ -11,10 +11,6 @@ import csvw
 COMPOSITE = (pyclts.models.Diphthong, pyclts.models.Cluster)
 CATEGORIES = {"consonant", "vowel", "cluster", "diphthong", "tone"}
 
-# TODO:
-# NEW in CLTS
-#
-
 
 @dataclass
 class Rule():

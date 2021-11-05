@@ -3,3 +3,5 @@ powerlaw
 pylexibank
 pyclts @ git+https://github.com/cldf-clts/pyclts.git#egg=pyclts
 linse @ git+https://github.com/lingpy/linse.git#egg=linse
+sinopy
+lexibank_analysed @ git+https://github.com/lexibank/lexibank-analysed.git

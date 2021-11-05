@@ -1,0 +1,80 @@
+"TYPE","CONDITIONS","MODIFICATION","COMMENT"
+"vowel","relative_articulation=",,
+"vowel","tongue_root=",,"New CLTS 2 feature"
+"vowel","creakiness=",,
+"vowel","rounding=",,
+"vowel","stress=",,
+"vowel","pharyngealization=",,
+"vowel","rhotacization=",,
+"vowel","voicing=",,
+"vowel","syllabicity=",,
+"vowel","raising=",,
+"vowel","friction=",,"was “frication” in previous CLTS"
+"vowel","duration=",,
+"vowel","velarization=",,
+"vowel","tongue_root=",,
+"vowel","tone=",,
+"vowel","articulation=",,
+"vowel","breathiness=",,
+"vowel","glottalization=",,
+"vowel","centrality=near-back","centrality=back","reduce centrality to three values"
+"vowel","centrality=near-front","centrality=front","reduce centrality to three values"
+"vowel","height=open&roundedness=unrounded","height=open&centrality=non-front&roundedness=unrounded","neutralize centrality for [a]/[ɑ]"
+"vowel","height=near-open&centrality=central","height=open&centrality=non-front","neutralize centrality for [ɐ]"
+"vowel","height=near-close","height=close","reduce height to three values"
+"vowel","height=close-mid","height=mid","reduce height to three values"
+"vowel","height=open-mid","height=mid","reduce height to three values"
+"vowel","height=near-open","height=open","reduce height to three values"
+"consonant","tongue_root=",,"New CLTS 2 feature"
+"consonant","aspiration=",,
+"consonant","creakiness=",,
+"consonant","release=",,
+"consonant","ejection=",,
+"consonant","pharyngealization=",,
+"consonant","nasalization=",,
+"consonant","preceding=",,
+"consonant","labialization=",,
+"consonant","syllabicity=",,
+"consonant","duration=",,
+"consonant","stress=",,
+"consonant","velarization=",,
+"consonant","laminality=",,
+"consonant","articulation=",,
+"consonant","breathiness=",,
+"consonant","glottalization=",,
+"consonant","raising=",,
+"consonant","relative_articulation=",,
+"consonant","manner=implosive","manner=stop",
+"consonant","manner=nasal-click","manner=click",
+"consonant","manner=tap","manner=vibrant",
+"consonant","manner=trill","manner=vibrant",
+"consonant","place=bilabial","place=labial",
+"consonant","place=labio-dental","place=labial",
+"consonant","place=lateral","place=alveolar&laterality=lateral","handle clicks with place=lateral"
+"consonant","place=linguolabial","place=anterior",
+"consonant","place=dental","place=anterior",
+"consonant","place=alveolar","place=anterior",
+"consonant","place=alveolo-palatal","place=palatal",
+"consonant","place=post-alveolar","place=palatal",
+"consonant","place=labio-palatal","place=palatal",
+"consonant","palatalization=palatalized&place=anterior","place=palatal","treat palatalized anteriors as palatals"
+"consonant","palatalization=",,"this rule ordered after treatment of palatalized anteriors"
+"consonant","place=palatal-velar","place=velar",
+"consonant","voicing=devoiced","phonation=voiceless",
+"consonant","voicing=revoiced","phonation=voiced",
+"consonant","place=palatal&airstream=sibilant","place=palatal","neutralize sibilancy in palatals"
+"consonant","place=retroflex&airstream=sibilant","place=retroflex","neutralize sibilancy in retroflexes (where all fricatives are sibilant)"
+"consonant","manner=click&airstream=lateral","manner=click","neutralize laterality in clicks"
+"consonant","manner=vibrant&airstream=lateral","manner=vibrant","neutralize laterality in vibrants"
+"consonant","manner=approximant&phonation=voiceless","manner=approximant&phonation=voiced","neutralize phonation in sonorants to the unmarked value"
+"consonant","manner=vibrant&phonation=voiceless","manner=vibrant&phonation=voiced","neutralize phonation in sonorants to the unmarked value"
+"consonant","manner=nasal&phonation=voiceless","manner=nasal&phonation=voiced","neutralize phonation in sonorants to the unmarked value"
+"consonant","manner=click&phonation=voiced","manner=click&phonation=voiceless","neutralize phonation in clicks to the unmarked value"
+"consonant","place=anterior&airstream=sibilant","place=sibilant-anterior","recategorize sibilancy as a subtype of anterior place"
+"consonant","place=anterior&airstream=sibilant","place=sibilant-anterior","recategorize sibilancy as a subtype of anterior place"
+"consonant","manner=fricative&airstream=lateral","manner=lateral-fricative","recategorize laterality as a subtype of manner"
+"consonant","manner=affricate&airstream=lateral","manner=lateral-affricate","recategorize laterality as a subtype of manner"
+"consonant","manner=approximant&airstream=lateral","manner=lateral-approximant","recategorize laterality as a subtype of manner"
+"marker","marker=→","marker=+","all morpheme boundaries annotated as +"
+"marker","marker=_","marker=+","all morpheme boundaries annotated as +"
+"marker","marker=←","marker=+","all morpheme boundaries annotated as +"

@@ -297,7 +297,7 @@ class LexicoreData(object):
                     family = langoid.family.name
                 if family == "Isolate":
                     family = langoid.name + "_isolate"
-
+                if family is None: continue
                 languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=row[
                     "Name"])  # TODO: should we use the langoid name here ?
         return languages

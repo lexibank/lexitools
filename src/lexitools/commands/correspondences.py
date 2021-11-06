@@ -367,9 +367,9 @@ class CorrespFinder(object):
 
         # Create wordlist instances for cognate detection
         if self.segmented:  # Cognates and alignments are morpheme-level
-            self.lex = partial.Partial(data, check=True)
+            self.lex = partial.Partial(data, check=True, apply_checks=True)
         else:  # Cognates and alignments are word-level
-            self.lex = lingpy.LexStat(data, check=True)
+            self.lex = lingpy.LexStat(data, check=True, apply_checks=True)
 
         # Check if this is usable
         if self.lex.height < 2 or self.lex.width < 2:

@@ -792,10 +792,11 @@ def run(args):
 
     export_infos = []
     for info in infos:
-        export_infos.append(info)
-        logging.info(f"Finished running for family {info['family']}")
-        # attempt to free up some memory...
-        del data._data[info['family']]
+        if info is not None:
+            export_infos.append(info)
+            logging.info(f"Finished running for family {info['family']}")
+            # attempt to free up some memory...
+            del data._data[info['family']]
 
     with open(output_prefix + f'_extraction_infos.json', 'w',
               encoding="utf-8") as infos_file:

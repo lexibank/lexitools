@@ -21,18 +21,13 @@ import logging
 import lingrex
 from pathlib import Path
 from cldfbench_lexibank_analysed import Dataset
+from multiprocessing import Pool
 
 # Do not merge consecutive vowels into diphthongs
 lingpy.settings.rcParams["merge_vowels"] = False
 
 # import cProfile
 # from memory_profiler import profile
-
-# TODO: rewrite to work in two steps:
-# 1. export a wordlist per family with all useful info
-# 2. run on a single family (this allows for simple parallelisation)
-
-# TODO: synonyms: prune identical rows which differ only by dataset
 
 
 # set of characters which should be ignored in tokens (markers, etc)
@@ -41,8 +36,10 @@ IGNORE = {"+", "*", "#", "_", ""}
 """A Language has a name, a glottocode, and a family."""
 Lang = namedtuple("Lang", ('glottocode', 'family', 'name'))
 
+
 class NotEnoughDataError(ValueError):
     pass
+
 
 class MagicGap(str):
     """ A gap with context, which Lingrex recognizes as a gap.
@@ -68,6 +65,7 @@ class MagicGap(str):
     def __str__(self): return self.left + "|-|" + self.right
 
     def __hash__(self): return hash("-")
+
 
 class LexicoreData(object):
     """ Load and prepare lexicore data.
@@ -100,21 +98,22 @@ class LexicoreData(object):
             glottolog (pyglottolog.Glottolog): Glottolog instance to retrieve family names.
         """
         datasets = [(ds.properties['rdf:ID'], ds)
-                         for ds in Dataset()._datasets(set_="LexiCore")]
+                    for ds in Dataset()._datasets(set_="LexiCore")]
         if subset:
             datasets = list(filter(lambda x: x[0] in subset, datasets))
 
-        self.datasets_ids =  [id for id, _ in datasets]
+        self.datasets_ids = [id for id, _ in datasets]
 
         # This mixes some lingpy specific headers (used to init lexstat)
         # and some things we need specifically for this application
         namespace = ['doculect', 'concept', 'concepticon', 'original_token',
                      'original_id', 'tokens', 'structure',
                      'glottocode', 'cogid', 'cldf_dataset']
+
         self.cols = {n: i for i, n in enumerate(namespace)}
         self.stats = {}
         self.coarsen = coarsen
-        #
+
         # Obtain glottocode and family:
         # family can be obtained from glottolog (this is slow) if glottolog is loaded
         # if there is no glottocode, we can still use the hardcoded family
@@ -142,7 +141,7 @@ class LexicoreData(object):
         duplicates = Counter()
 
         for dataset_id, ds in progressbar(datasets,
-                               desc="Loading data..."):
+                                          desc="Loading data..."):
             for row in ds['FormTable']:
                 # Ignore loan words
                 if row.get("Loan", ""): continue
@@ -157,6 +156,11 @@ class LexicoreData(object):
                         row["Segments"] is None:
                     continue
 
+
+                doculect = row["Language_ID"]
+                lang = self.languages[doculect]
+
+
                 # Convert sounds, ignore rows with unknown or ignored sounds
                 try:
                     tokens = list(self._iter_phonemes(row))
@@ -165,10 +169,8 @@ class LexicoreData(object):
                     continue  # unknown sounds
                 if all([s in IGNORE for s in tokens]): continue
 
-                doculect = row["Language_ID"]
-                lang = self.languages[doculect]
-
                 cogid = row.get("Cognacy", row.get("Cognateset_ID", None))
+
 
                 self.cogids[(lang.family, dataset_id)].add(cogid)
 
@@ -182,15 +184,24 @@ class LexicoreData(object):
                 self._data[lang.family].append([doculect, concept_gloss, concept_id,
                                                 " ".join(row["Segments"]), row["ID"],
                                                 tokens, structure,
-                                                lang.glottocode, cogid, dataset_id])
+                                                lang.glottocode,
+                                                cogid, dataset_id])
 
-        # lingpy wordlist internal format
-        self._data = {f: dict(enumerate(self._data[f])) for f in self._data}
         self._prepare_cogids()
         self.families = list(self._data)
 
     def __getitem__(self, item):
         return self._data[item]
+
+    def output(self, output_prefix):
+        filenames = []
+        for family in self.families:
+            filename = f'{output_prefix}_data_{family}.csv'
+            filenames.append(filename)
+            with open(filename, 'w',
+                      encoding="utf-8") as csvfile:
+                writer = csv.writer(csvfile, delimiter=',', )
+                writer.writerows(self._data[family])
 
     def iter_table(self, table_name):
         """ Iter on the rows of a specific table, across all loaded datasets.
@@ -239,7 +250,7 @@ class LexicoreData(object):
         t = self.cols["original_token"]
         d = self.cols["cldf_dataset"]
         for family in self._data:
-            for i, row in self._data[family].items():
+            for i, row in enumerate(self._data[family]):
                 if i > 0:
                     cogid = row[c]
                     dataset = row[d]
@@ -327,23 +338,28 @@ class LexicoreData(object):
                                     " ".join(str(x) for x in segments), row["ID"]))
                 raise e
 
+
 class CorrespFinder(object):
 
-    def __init__(self, family, data, cols, languages, prefix, coarse):
+    def __init__(self, data, family, prefix, languages, categories):
         """ Class for finding sound correspondences in a given family. """
+        data = dict(enumerate(data))
+        cols = {n: i for i, n in enumerate(data[0])}
+        self.categories = categories
+
+        logging.info(f"Preparing data for {family}")
         self.languages = languages
-        self.family = family
         self.prefix = prefix
-        self.coarsen = coarse
         cogids_counts = Counter()
         self.segmented = False
-        self.gold_segmented = False
+        self.gold_segmented = True
+
         for i, row in data.items():
             cogid = row[cols["cogid"]]
             if "+" in row[cols["tokens"]]:
                 self.segmented = True
-            if type(cogid) is tuple:
-                self.gold_segmented = True
+            if type(cogid) is not tuple:
+                self.gold_segmented = False
             cogids_counts[cogid] += 1
         self.needs_prediction = None in cogids_counts
         self.partial = (self.needs_prediction and self.segmented) \
@@ -357,34 +373,17 @@ class CorrespFinder(object):
 
         # Check if this is usable
         if self.lex.height < 2 or self.lex.width < 2:
-            datasets = ", ".join({r[cols["cldf_dataset"]] for i, r in data.items() if i > 0})
+            datasets = ", ".join(
+                {r[cols["cldf_dataset"]] for i, r in data.items() if i > 0})
             raise NotEnoughDataError(f"Family {family} has no usable data "
                                      f"(datasets: {datasets})")
 
-        self.infos = self.sanity_stats()
-        self.evals = {}
+        self.infos = sanity_stats(self.lex)
+        self.infos["evals"] = {}
+        self.infos["family"] = self.family = family
 
-    def sanity_stats(self):
-        """Useful sanity stats for cognate recognition.
 
-        Uses standard lingpy functions.
-        """
-
-        def mut_cov():
-            for i in range(self.lex.height, 1, -1):
-                if mutual_coverage_check(self.lex, i):
-                    return i
-            return 0
-
-        d = {"min_mutual_coverage": mut_cov()}
-
-        try:
-            d["average_coverage"] = average_coverage(self.lex)
-        except ZeroDivisionError:
-            d["average_coverage"] = 0
-        return d
-
-    def find_correspondences(self, pbar, eval=False):
+    def find_correspondences(self, eval=False):
         """ Iterator over correspondence patterns.
 
         Finds correspondence patterns:
@@ -414,39 +413,37 @@ class CorrespFinder(object):
         lingpy.log.get_logger().setLevel(logging.WARNING)
 
         # Find cognates
-        pbar.set_description(f"Searching for cognates in {self.family}", refresh=True)
+        logging.info(f"Searching for cognates in {self.family}")
         self._find_cognates(eval)
 
         # Align cognates
-        pbar.set_description(f"Aligning cognates in {self.family}", refresh=True)
+        logging.info(f"Aligning cognates in {self.family}")
         self.lex = lingpy.Alignments(self.lex, ref="pred_cogid", fuzzy=self.partial)
         self.lex.align(method='library', iteration=True, model="sca", mode="global")
 
         # Override alignment to add contexts (no loss of info)
-        pbar.set_description(f"Adding contexts in {self.family}", refresh=True)
+        logging.info(f"Adding contexts in {self.family}")
         msa = self.lex.msa["pred_cogid"]
         for cogid in msa:
             msa[cogid]["alignment"] = [list(self.add_contexts(seq)) for seq in
                                        msa[cogid]["alignment"]]
 
         # Consolidate alignment sites into patterns
-        pbar.set_description(f"Clustering alignment sites into patterns in {self.family}",
-                             refresh=True)
+        logging.info(f"Clustering alignment sites into patterns in {self.family}")
         self.lex = lingrex.CoPaR(self.lex, ref="pred_cogid", fuzzy=self.partial,
-                           segments="tokens", structure="structure")
+                                 segments="tokens", structure="structure")
         self.lex.get_sites()
         self.lex.cluster_sites()
 
         langs = self.lex.cols
 
-        pbar.set_description(f"Preparing corresp patterns in {self.family}", refresh=True)
+        logging.info(f"Preparing corresp patterns in {self.family}")
         # Iterate over patterns
         for pat_idx, ((_, pattern), sites) in enumerate(self.lex.clusters.items()):
             # Unique identifier for this pattern
             pattern_id = self.family + "-" + str(pat_idx)
             # print(pattern)
 
-            l = sum([x != 'Ø' for x in pattern])  # Number of sounds in the pattern
             site_count = len(sites)  # Number of sites displaying the pattern
             sites_refs = [dict(zip(self.lex.msa["pred_cogid"][cog]["taxa"],
                                    self.lex.msa["pred_cogid"][cog]["ID"])) for cog, pos in
@@ -473,7 +470,6 @@ class CorrespFinder(object):
                        self.languages[lang].glottocode,
                        ";".join(examples)]
         # TODO: notes for Erich: having this context specific makes it a little sparser, might want to merge them.
-
 
     def _find_cognates(self, eval):
         """ Perform cognate detection & evaluation in a given family.
@@ -509,8 +505,7 @@ class CorrespFinder(object):
                       cluster_method='infomap')
 
             if self.infos["min_mutual_coverage"] < 100:
-                kw = dict(method="sca", threshold=0.45, ref='pred_cogid',
-                          no_bscorer=True)
+                kw = dict(method="sca", threshold=0.45, ref='pred_cogid')
 
             # Run cognate detection
             if self.segmented:
@@ -572,9 +567,17 @@ class CorrespFinder(object):
                 continue
 
             if self.segmented and self.gold_segmented:
-                res = lingpy.evaluate.acd.partial_bcubes(eval_lex, gold='cogid',
+                try:
+                    res = lingpy.evaluate.acd.partial_bcubes(eval_lex, gold='cogid',
                                                          test='pred_cogid',
                                                          pprint=False)
+                except TypeError:
+                    print("\n\n\n")
+                    print(dataset)
+                    print("\n\n\n")
+                    raise
+
+
                 # Diff won't work with lists, needs a tuple
                 eval_lex.add_entries("pred_cogid", "pred_cogid",
                                      tuple,
@@ -595,13 +598,13 @@ class CorrespFinder(object):
                                      pprint=False)
 
             d = dict(zip(eval_measures, res))
-            d.update(self.sanity_stats(eval_lex))
+            d.update(sanity_stats(eval_lex))
             d["cognate_source"] = self.infos["cognate_source"]
             d["cognates"] = len({cog for i, cog in eval_lex.iter_rows("cogid")})
             d["languages"] = eval_lex.width
             d["tokens"] = len(eval_lex)
             d["detection_type"] = "morpheme" if self.segmented else "word"
-            self.evals[dataset] = d
+            self.infos["evals"][dataset] = d
             del by_datasets[dataset]
 
     def add_contexts(self, seq):
@@ -621,7 +624,7 @@ class CorrespFinder(object):
                 elif s in IGNORE:
                     yield s
                 else:
-                    cat = self.coarsen.category(s)
+                    cat = self.categories[s]
                     if cat in {"T"}:
                         yield None
                     else:
@@ -646,6 +649,25 @@ class CorrespFinder(object):
             left = left if cats[i] is None else cats[i]
 
 
+def sanity_stats(lexicon):
+    """Useful sanity stats for cognate recognition.
+
+    Uses standard lingpy functions.
+    """
+
+    def mut_cov():
+        for i in range(lexicon.height, 1, -1):
+            if mutual_coverage_check(lexicon, i):
+                return i
+        return 0
+
+    d = {"min_mutual_coverage": mut_cov()}
+
+    try:
+        d["average_coverage"] = average_coverage(lexicon)
+    except ZeroDivisionError:
+        d["average_coverage"] = 0
+    return d
 
 def register(parser):
     # Standard catalogs can be "requested" as follows:
@@ -656,11 +678,11 @@ def register(parser):
     parser.description = run.__doc__
 
     parser.add_argument(
-        '--display',
-        action='store',
-        default=None,
-        help='select a display')
-
+        '--cpus',
+        default=1,
+        type=int,
+        help='Number of cpus to use for multithreading'
+    )
     parser.add_argument(
         '--subset',
         default=None,
@@ -674,6 +696,12 @@ def register(parser):
         action='store_true',
         default=False,
         help='Evaluate cognate detection.')
+
+    parser.add_argument(
+        '--output',
+        type=Path,
+        default=Path("results/"),
+        help='output folder')
 
     parser.add_argument(
         '--concepts',
@@ -712,83 +740,97 @@ def run(args):
     clts = args.clts.from_config().api
 
     now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
-    output_prefix = f"{now}_sound_correspondences"
+    args.output.mkdir(exist_ok=True, parents=True)
 
     coarsening_file = (
-                Path(__file__) / "../../../../etc/default_coarsening.csv").resolve()
+            Path(__file__) / "../../../../etc/default_coarsening.csv").resolve()
     coarse = Coarsen(clts.bipa, str(coarsening_file))
 
+    output_prefix = str(args.output / f"{now}_sound_correspondences")
+
     data = LexicoreData(coarse,
-                            pyglottolog.Glottolog(args.glottolog.dir),
-                            concept_list=args.concepts,
-                           subset=args.subset)
+                        pyglottolog.Glottolog(args.glottolog.dir),
+                        concept_list=args.concepts,
+                        subset=args.subset)
+
+    # data.output(output_prefix) # In case we want intermediary output
 
     args.log.info(
         f'Loaded the wordlist ({len(data.languages)} languages, '
         f'{len(data.families)} families, '
         f'{len(data.concepts_subset)} concepts kept)')
 
-
-    metadata_dict = {"concepts": args.concepts,}
-    metadata_dict["dataset_list"] = sorted(data.datasets_ids)
-    metadata_dict["n_families"] = len(data.families)
-    metadata_dict["n_concepts"] = len(data.concepts_subset)
-    metadata_dict["n_tokens"] = sum([len(data[f]) - 1 for f in data.families])
-
-    cognate_stats = [["family", "min_mutual_coverage",
-                      "average_coverage", "cognate_source","cognate_type"]
-                     ]
-    eval_stats = {}
-    pbar = progressbar(data.families, desc="Searching for correspondences...")
-    for family in pbar:
-        pbar.set_description(f"Initializing lexstat/partial for {family}" ,refresh=True)
-        try:
-            corresp_finder = CorrespFinder(family, data[family],
-                                           data.cols,
-                                           data.languages,
-                                           output_prefix,
-                                           coarse)
-
-        except NotEnoughDataError:
-            continue
-
-        # Find all correspondences and write
-        with open(f'{output_prefix}_{family}_counts.csv', 'w', encoding="utf-8") as csvfile:
-            writer = csv.writer(csvfile, delimiter=',', )
-            writer.writerow(
-                ["family", "pat_id", "count", "left_context", "sound", "right_context",
-                 "language", "glottocode", "examples"])
-            writer.writerows(corresp_finder.find_correspondences(pbar, args.cognate_eval))
-
-        # Collect infos which are written once for entire dataset
-        cognate_stats.append([family,
-                 corresp_finder.infos["min_mutual_coverage"],
-                 corresp_finder.infos["average_coverage"],
-                 corresp_finder.infos["cognate_source"],
-                 corresp_finder.infos["detection_type"]])
-        eval_stats[family] = corresp_finder.evals
-
-
-        # Clear some memory...
-        del data._data[family]
-
     with open(f'{output_prefix}_coarsening.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
         writer.writerows(coarse.as_table())
 
-    with open(f'{output_prefix}_cognate_info.csv', 'w', encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerows(cognate_stats)
-
-    for family in eval_stats:
-        for dataset in eval_stats[family]:
-            metadata_dict[f"eval_{family}_{dataset}"] = eval_stats[family][dataset]
-
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:
-        json.dump(metadata_dict, metafile, indent=4, sort_keys=True)
+        json.dump({"concepts": args.concepts,
+                   "dataset_list": sorted(data.datasets_ids),
+                   "n_families": data.families,
+                   "n_concepts": len(data.concepts_subset),
+                   "n_tokens": sum([len(data[f]) - 1 for f in data.families])},
+                  metafile, indent=4, sort_keys=True)
 
     with open(output_prefix + '_sound_errors.csv', 'w',
               encoding="utf-8") as errorfile:
         for line in data.errors:
             errorfile.write(",".join(line) + "\n")
+
+    # Multithread search for corresp patterns
+
+    if args.cpus > 1:
+        pool = Pool(args.cpus)
+        map = pool.imap_unordered
+
+    infos = progressbar(map(process_family,
+                            ((data[family], family, output_prefix, data.languages,
+                              coarse.categories, args.cognate_eval) for family
+                             in data.families)
+                            ), total=len(data.families))
+
+    export_infos = []
+    for info in infos:
+        export_infos.append(info)
+        logging.info(f"Finished running for family {info['family']}")
+        # attempt to free up some memory...
+        del data[info['family']]
+
+    with open(output_prefix + f'_extraction_infos.json', 'w',
+              encoding="utf-8") as infos_file:
+        json.dump(export_infos, infos_file, indent=4, sort_keys=True)
+
+def process_family(args):
+    """ Find correspondences for a single family and write results.
+
+    This can be run in parallel on each family.
+
+    Args:
+        args: Tuple with all arguments for CorrespFinder
+
+    Returns:
+        infos (dict): information on cognate inference & evaluation.
+    """
+    data, family, output_prefix, languages, categories, eval = args
+    try:
+        corresp_finder = CorrespFinder(data, family, output_prefix, languages, categories)
+    except NotEnoughDataError:
+        return None
+
+    # Find all correspondences and write
+    with open(f'{output_prefix}_{family}_counts.csv', 'w',
+              encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerow(
+            ["family", "pat_id", "count", "left_context", "sound", "right_context",
+             "language", "glottocode", "examples"])
+        writer.writerows(corresp_finder.find_correspondences(eval))
+
+    return corresp_finder.infos
+
+
+# TODO: memory management with multithreading
+# TODO: In the same family (e.g. Sino-Tibetan), some datasets might have eval data which is segmented,
+# and some might have eval data which is not segmented.
+# We do the eval per dataset, but should we re-predict for each eval dataset using the same param for segmentation ?

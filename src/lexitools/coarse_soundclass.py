@@ -141,6 +141,12 @@ class Coarsen(object):
             for s in sounds[f]:
                 self.cache[str(s)] = str(name)  # Instead, first try for the name
 
+        for s in self.cache:
+            self.category(s) # make sure to cache the category too
+
+        for name in self.features:
+            self.category(name)
+
     def _category(self, sound):
         s = self[sound]
         feats = self.features[s]
@@ -334,6 +340,8 @@ class Coarsen(object):
             else:
                 coarse_sound = self.coarsen_sound(sound)
             self.cache[item] = coarse_sound
+            self.category(item) # make sure to cache the category too
+            self.category(coarse_sound) # make sure to cache the category too
             return coarse_sound
 
     def coarsen_sound(self, simple_sound):

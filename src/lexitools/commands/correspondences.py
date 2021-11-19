@@ -22,6 +22,7 @@ import lingrex
 from pathlib import Path
 from cldfbench_lexibank_analysed import Dataset
 from multiprocessing import Pool
+from itertools import groupby
 
 # Do not merge consecutive vowels into diphthongs
 lingpy.settings.rcParams["merge_vowels"] = False
@@ -327,8 +328,10 @@ class LexicoreData(object):
                                                    "bookkeeping"])
                     continue
 
+                if family == "Isolate":  continue
+
                 languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=row[
-                    "Name"])  # TODO: should we use the langoid name here ?
+                    "Name"])
         return languages
 
     def _iter_phonemes(self, row):
@@ -441,6 +444,29 @@ class CorrespFinder(object):
                                    cldf_dataset=alm[i, "cldf_dataset"],
                                    original_id=alm[i, "original_id"])
 
+        def restore_edges(ids, seqs):
+            """Restores the contexts when alignments were partial."""
+            edges = []
+            for i, seq in zip(ids, seqs):
+                tok = list(self.lex[i, "tokens"])
+                l = len(seq)
+                if len(tok) == l:
+                    edges.append(("#", "#"))
+                else:
+                    morphemes = [[s for s in group]
+                                 for key, group in groupby(tok, lambda x: x == "+")
+                                 if not key]
+                    cats = [[s for s in self.to_categories(m, None) if s is not None]
+                                for m in morphemes]
+                    l_m = len(morphemes)
+                    for i, morpheme in enumerate(morphemes):
+                        if morpheme == seq:
+                            left = "#" if i == 0 else cats[i - 1][-1]
+                            right = "#" if i + 1 == l_m else cats[i + 1][0]
+                            edges.append((left, right))
+                            break
+            return edges
+
         lingpy.log.get_logger().setLevel(logging.WARNING)
 
         # Find cognates
@@ -456,8 +482,9 @@ class CorrespFinder(object):
         logging.info(f"Adding contexts in {self.family}")
         msa = self.lex.msa["pred_cogid"]
         for cogid in msa:
-            msa[cogid]["alignment"] = [list(self.add_contexts(seq)) for seq in
-                                       msa[cogid]["alignment"]]
+            edges = restore_edges(msa[cogid]["ID"], msa[cogid]["seqs"])
+            msa[cogid]["alignment"] = [list(self.add_contexts(seq, *l_r)) for seq, l_r in
+                                       zip(msa[cogid]["alignment"], edges)]
 
         # Consolidate alignment sites into patterns
         logging.info(f"Clustering alignment sites into patterns in {self.family}")
@@ -635,7 +662,20 @@ class CorrespFinder(object):
             self.infos["evals"][dataset] = d
             del by_datasets[dataset]
 
-    def add_contexts(self, seq):
+    def to_categories(self, sequence, right):
+        """Turn a sequence of sounds into a sequence of categories used in contexts"""
+        for s in sequence:
+            if s == "-" or s in IGNORE:
+                yield None
+            else:
+                cat = self.categories[s]
+                if cat in {"T"}:
+                    yield None
+                else:
+                    yield cat
+        yield right
+
+    def add_contexts(self, seq, left, right):
         """ Iterator of sounds and contexts for a pair of aligned tokens.
 
         Args:
@@ -644,28 +684,12 @@ class CorrespFinder(object):
         Yields: pair of aligned sounds and their contexts: `(sound, context)`
         """
 
-        def to_categories(sequence):
-            """Turn a sequence of sounds into a sequence of categories used in contexts"""
-            for s in sequence:
-                if s == "-":
-                    yield None
-                elif s in IGNORE:
-                    yield s
-                else:
-                    cat = self.categories[s]
-                    if cat in {"T"}:
-                        yield None
-                    else:
-                        yield cat
-            yield "#"
-
         def get_right_context(cats, i):
             """Return the context for a given sound."""
             return next((c for c in cats[i + 1:] if c is not None))
 
-        cats = list(to_categories(seq))
+        cats = list(self.to_categories(seq, right))
         l = len(seq)
-        left = "#"
         for i in range(l):
             right = get_right_context(cats, i)
             if seq[i] == "-":  # output a gap which retains context info

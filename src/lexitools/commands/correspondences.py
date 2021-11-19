@@ -590,8 +590,7 @@ class CorrespFinder(object):
         for dataset in progressbar(list(by_datasets), desc="Evaluating each dataset..."):
             gold_rows = dict(enumerate(by_datasets[dataset]))
             eval_lex = lingpy.Wordlist(gold_rows)
-            d = dict(zip(eval_measures, res))
-            d["cognate_source"] = self.infos["cognate_source"]
+            d = {"cognate_source": self.infos["cognate_source"]}
 
             if eval_lex.height < 2 or eval_lex.width < 2:
                 logging.warning(f"Dataset {dataset} in family {self.family}"
@@ -620,12 +619,14 @@ class CorrespFinder(object):
                 res = lingpy.evaluate.acd.bcubes(eval_lex, gold='cogid',
                                                  test='pred_cogid',
                                                  pprint=False)
+
             lingpy.evaluate.acd.diff(eval_lex, 'cogid', 'pred_cogid', tofile=True,
                                      filename=f"{self.prefix}_"
                                               f"{self.family}_"
                                               f"{dataset}_cognate_eval",
                                      pprint=False)
 
+            d.update(dict(zip(eval_measures, res)))
             d.update(sanity_stats(eval_lex))
             d["cognates"] = len({cog for i, cog in eval_lex.iter_rows("cogid")})
             d["languages"] = eval_lex.width

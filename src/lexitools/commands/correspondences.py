@@ -806,7 +806,6 @@ def run(args):
         writer = csv.writer(csvfile, delimiter=',', )
         writer.writerows(data.languages_dropped)
 
-    exit()
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:

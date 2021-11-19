@@ -796,10 +796,10 @@ def run(args):
              "rel_freq"])
         for lang in data.sound_freqs:
             total = sum(data.sound_freqs[lang].values())
-            for sound, coarse in data.sound_freqs[lang]:
-                rel_freq = data.sound_freqs[lang][(sound, coarse)] / total
+            for sound, coarse_sound in data.sound_freqs[lang]:
+                rel_freq = data.sound_freqs[lang][(sound, coarse_sound)] / total
                 writer.writerow([lang.family, lang.glottocode, lang.name,
-                                 sound, coarse, rel_freq])
+                                 sound, coarse_sound, rel_freq])
 
     # Write all glottocode errors
     with open(f'{output_prefix}_languages_errors.csv', 'w', encoding="utf-8") as csvfile:
@@ -822,12 +822,13 @@ def run(args):
         for line in data.errors:
             errorfile.write(",".join(line) + "\n")
 
+    map_f = map
     # Multithread search for corresp patterns
     if args.cpus > 1:
         pool = Pool(args.cpus)
-        map = pool.imap_unordered
+        map_f = pool.imap_unordered
 
-    infos = progressbar(map(process_family,
+    infos = progressbar(map_f(process_family,
                             ((data[family], family, output_prefix, data.languages,
                               coarse.categories, args.cognate_eval) for family
                              in data.families)

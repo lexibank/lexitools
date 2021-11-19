@@ -771,9 +771,8 @@ def run(args):
     coarse = Coarsen(clts.bipa, str(coarsening_file))
 
     output_prefix = str(args.output / f"{now}_sdcorr")
-
-    data = LexicoreData(coarse,
-                        pyglottolog.Glottolog(args.glottolog.dir),
+    glottolog = pyglottolog.Glottolog(args.glottolog.dir)
+    data = LexicoreData(coarse, glottolog,
                         concept_list=args.concepts,
                         subset=args.subset)
 
@@ -808,6 +807,7 @@ def run(args):
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:
         json.dump({"concepts": args.concepts,
+                   "glottolog": glottolog.describe(),
                    "dataset_list": sorted(data.datasets_ids),
                    "n_families": data.families,
                    "n_concepts": len(data.concepts_subset),

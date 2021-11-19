@@ -117,6 +117,10 @@ class LexicoreData(object):
         # Obtain glottocode and family:
         # family can be obtained from glottolog (this is slow) if glottolog is loaded
         # if there is no glottocode, we can still use the hardcoded family
+        self.languages_dropped = [
+            ["dataset", "glottocode", "language_ID", "language_Name",
+             "ISO639P3code", "error_type"]
+        ]
         self.languages = self._prepare_languages(datasets, glottolog)
 
         self.errors = [["Dataset", "Language_ID", "Sound", "Token", "ID"]]
@@ -137,7 +141,8 @@ class LexicoreData(object):
         # dict of family -> (language, concept, word) -> row
         self._data = defaultdict(lambda: [namespace])
         self.cogids = defaultdict(set)
-
+        self.sound_freqs = defaultdict(
+            lambda: Counter())  # lang -> (sound, coarse) -> count
         duplicates = Counter()
 
         for dataset_id, ds in progressbar(datasets,
@@ -156,10 +161,8 @@ class LexicoreData(object):
                         row["Segments"] is None:
                     continue
 
-
                 doculect = row["Language_ID"]
                 lang = self.languages[doculect]
-
 
                 # Convert sounds, ignore rows with unknown or ignored sounds
                 try:
@@ -170,7 +173,6 @@ class LexicoreData(object):
                 if all([s in IGNORE for s in tokens]): continue
 
                 cogid = row.get("Cognacy", row.get("Cognateset_ID", None))
-
 
                 self.cogids[(lang.family, dataset_id)].add(cogid)
 
@@ -290,14 +292,37 @@ class LexicoreData(object):
         for name, ds in progressbar(datasets, desc="listing languages"):
             for row in ds["LanguageTable"]:
                 gcode = row["Glottocode"]
-                if gcode is None: continue
-                family = row["Family"]
+
+                if gcode is None:
+                    self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
+                                                   row.get("ISO639P3code", None),
+                                                   "missing"])
+                    continue  # TODO: keep when glottocode is None ?
+
                 langoid = langoids.get(gcode, None)
-                if langoid is not None and langoid.family is not None:
-                    family = langoid.family.name
-                if family == "Isolate":
+
+                if langoid is None:
+                    self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
+                                                   row.get("ISO639P3code", None),
+                                                   "langoid not found"])
+                    continue
+
+                if langoid.family is None:
+                    self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
+                                                   row.get("ISO639P3code", None),
+                                                   "langoid family is None"])
+                    continue
+
+                family = langoid.family.name
+
+                if family.lower() == "bookkeeping":
+                    self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
+                                                   row.get("ISO639P3code", None),
+                                                   "bookkeeping"])
+
+                if family == "Isolate":  # TODO: Should we not just delete any data where the family is an isolate ?
                     family = langoid.name + "_isolate"
-                if family is None: continue
+
                 languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=row[
                     "Name"])  # TODO: should we use the langoid name here ?
         return languages
@@ -328,11 +353,14 @@ class LexicoreData(object):
             try:
                 if "/" in segment:
                     segment = segment.split("/")[1]
-                segment = self.coarsen[segment]
+                coarse = self.coarsen[segment]
                 if (
-                        i == 0 or i == l - 1) and segment == "+":  # ignore initial and final "+"
+                        i == 0 or i == l - 1) and coarse == "+":  # ignore initial and final "+"
                     continue
-                yield segment
+
+                lang = self.languages[row["Language_ID"]]
+                self.sound_freqs[lang][(segment, coarse)] += 1
+                yield coarse
             except ValueError as e:
                 self.errors.append((row["dataset"], row["Language_ID"], segment,
                                     " ".join(str(x) for x in segments), row["ID"]))
@@ -381,7 +409,6 @@ class CorrespFinder(object):
         self.infos = sanity_stats(self.lex)
         self.infos["evals"] = {}
         self.infos["family"] = self.family = family
-
 
     def find_correspondences(self, eval=False):
         """ Iterator over correspondence patterns.
@@ -558,8 +585,9 @@ class CorrespFinder(object):
         # Evaluate inside each dataset
         for dataset in progressbar(list(by_datasets), desc="Evaluating each dataset..."):
             gold_rows = dict(enumerate(by_datasets[dataset]))
-
             eval_lex = lingpy.Wordlist(gold_rows)
+            d = dict(zip(eval_measures, res))
+            d["cognate_source"] = self.infos["cognate_source"]
 
             if eval_lex.height < 2 or eval_lex.width < 2:
                 logging.warning(f"Dataset {dataset} in family {self.family}"
@@ -567,16 +595,9 @@ class CorrespFinder(object):
                 continue
 
             if self.segmented and self.gold_segmented:
-                try:
-                    res = lingpy.evaluate.acd.partial_bcubes(eval_lex, gold='cogid',
+                res = lingpy.evaluate.acd.partial_bcubes(eval_lex, gold='cogid',
                                                          test='pred_cogid',
                                                          pprint=False)
-                except TypeError:
-                    print("\n\n\n")
-                    print(dataset)
-                    print("\n\n\n")
-                    raise
-
 
                 # Diff won't work with lists, needs a tuple
                 eval_lex.add_entries("pred_cogid", "pred_cogid",
@@ -587,6 +608,10 @@ class CorrespFinder(object):
                     eval_lex.add_entries("pred_cogid", "pred_cogid",
                                          lambda x: " ".join(str(i) for i in x),
                                          override=True)
+                    d["warning"] = "Warning: pred_cogid used Partial, " \
+                                   "but the gold data is word-based. " \
+                                   "To evaluate, we merged morpheme-based IDs into" \
+                                   "word ids."
 
                 res = lingpy.evaluate.acd.bcubes(eval_lex, gold='cogid',
                                                  test='pred_cogid',
@@ -597,9 +622,7 @@ class CorrespFinder(object):
                                               f"{dataset}_cognate_eval",
                                      pprint=False)
 
-            d = dict(zip(eval_measures, res))
             d.update(sanity_stats(eval_lex))
-            d["cognate_source"] = self.infos["cognate_source"]
             d["cognates"] = len({cog for i, cog in eval_lex.iter_rows("cogid")})
             d["languages"] = eval_lex.width
             d["tokens"] = len(eval_lex)
@@ -668,6 +691,7 @@ def sanity_stats(lexicon):
     except ZeroDivisionError:
         d["average_coverage"] = 0
     return d
+
 
 def register(parser):
     # Standard catalogs can be "requested" as follows:
@@ -739,14 +763,14 @@ def run(args):
     args.log.info(args)
     clts = args.clts.from_config().api
 
-    now = time.strftime("%Y%m%d-%Hh%Mm%Ss")
+    now = time.strftime("%Y%m%d-%Hh%Mm")
     args.output.mkdir(exist_ok=True, parents=True)
 
     coarsening_file = (
             Path(__file__) / "../../../../etc/default_coarsening.csv").resolve()
     coarse = Coarsen(clts.bipa, str(coarsening_file))
 
-    output_prefix = str(args.output / f"{now}_sound_correspondences")
+    output_prefix = str(args.output / f"{now}_sdcorr")
 
     data = LexicoreData(coarse,
                         pyglottolog.Glottolog(args.glottolog.dir),
@@ -760,9 +784,26 @@ def run(args):
         f'{len(data.families)} families, '
         f'{len(data.concepts_subset)} concepts kept)')
 
-    with open(f'{output_prefix}_coarsening.csv', 'w', encoding="utf-8") as csvfile:
+    # Write all sound frequency
+    with open(f'{output_prefix}_sd_freqs.csv', 'w',
+              encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerows(coarse.as_table())
+        writer.writerow(
+            ["family", "glottocode", "language", "original_sound", "coarse_sound",
+             "rel_freq"])
+        for lang in data.sound_freqs:
+            total = sum(data.sound_freqs[lang].values())
+            for sound, coarse in data.sound_freqs[lang]:
+                rel_freq = data.sound_freqs[lang][(sound, coarse)] / total
+                writer.writerow([lang.family, lang.glottocode, lang.name,
+                                 sound, coarse, rel_freq])
+
+    # Write all glottocode errors
+    with open(f'{output_prefix}_languages_errors.csv', 'w', encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerows(data.languages_dropped)
+
+    exit()
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:
@@ -779,7 +820,6 @@ def run(args):
             errorfile.write(",".join(line) + "\n")
 
     # Multithread search for corresp patterns
-
     if args.cpus > 1:
         pool = Pool(args.cpus)
         map = pool.imap_unordered
@@ -801,6 +841,11 @@ def run(args):
     with open(output_prefix + f'_extraction_infos.json', 'w',
               encoding="utf-8") as infos_file:
         json.dump(export_infos, infos_file, indent=4, sort_keys=True)
+
+
+    with open(f'{output_prefix}_coarsening.csv', 'w', encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerows(coarse.as_table())
 
 def process_family(args):
     """ Find correspondences for a single family and write results.
@@ -829,7 +874,6 @@ def process_family(args):
         writer.writerows(corresp_finder.find_correspondences(eval))
 
     return corresp_finder.infos
-
 
 # TODO: memory management with multithreading
 # TODO: In the same family (e.g. Sino-Tibetan), some datasets might have eval data which is segmented,

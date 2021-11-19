@@ -297,7 +297,7 @@ class LexicoreData(object):
                     self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
                                                    row.get("ISO639P3code", None),
                                                    "missing"])
-                    continue  # TODO: keep when glottocode is None ?
+                    continue
 
                 langoid = langoids.get(gcode, None)
 
@@ -307,6 +307,11 @@ class LexicoreData(object):
                                                    "langoid not found"])
                     continue
 
+                # Exclude isolates, and family nodes (likely proto-languages)
+                if langoid.category == "Family" or langoid.isolate:
+                    continue
+
+
                 if langoid.family is None:
                     self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
                                                    row.get("ISO639P3code", None),
@@ -315,13 +320,12 @@ class LexicoreData(object):
 
                 family = langoid.family.name
 
+                # ignore bookkeeping langoids, we don't have family info for them
                 if family.lower() == "bookkeeping":
                     self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
                                                    row.get("ISO639P3code", None),
                                                    "bookkeeping"])
-
-                if family == "Isolate":  # TODO: Should we not just delete any data where the family is an isolate ?
-                    family = langoid.name + "_isolate"
+                    continue
 
                 languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=row[
                     "Name"])  # TODO: should we use the langoid name here ?

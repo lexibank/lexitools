@@ -35,7 +35,7 @@ lingpy.settings.rcParams["merge_vowels"] = False
 IGNORE = {"+", "*", "#", "_", ""}
 
 """A Language has a name, a glottocode, and a family."""
-Lang = namedtuple("Lang", ('glottocode', 'family', 'name'))
+Lang = namedtuple("Lang", ('glottocode', 'family', 'name', 'dataset', 'iso'))
 
 
 class NotEnoughDataError(ValueError):
@@ -118,13 +118,13 @@ class LexicoreData(object):
         # Obtain glottocode and family:
         # family can be obtained from glottolog (this is slow) if glottolog is loaded
         # if there is no glottocode, we can still use the hardcoded family
-        self.languages_dropped = [
+        self.languages_errors = [
             ["dataset", "glottocode", "language_ID", "language_Name",
              "ISO639P3code", "error_type"]
         ]
         self.languages = self._prepare_languages(datasets, glottolog)
 
-        self.errors = [["Dataset", "Language_ID", "Sound", "Token", "ID"]]
+        self.errors = [("Dataset", "Language_ID", "Sound", "Token", "ID")]
 
         concepts = {row["ID"]: (row["Concepticon_ID"], row["Concepticon_Gloss"])
                     for name, ds in datasets for row in ds['ParameterTable']}
@@ -162,8 +162,8 @@ class LexicoreData(object):
                         row["Segments"] is None:
                     continue
 
-                doculect = row["Language_ID"]
-                lang = self.languages[doculect]
+                lang_id = row["Language_ID"]
+                lang = self.languages[lang_id]
 
                 # Convert sounds, ignore rows with unknown or ignored sounds
                 try:
@@ -179,18 +179,25 @@ class LexicoreData(object):
 
                 # skip any duplicates.
                 ipa_word = tuple(tokens)
-                if duplicates[(doculect, concept_id, ipa_word)] > 0: continue
+                if duplicates[(lang_id, concept_id, ipa_word)] > 0: continue
 
-                duplicates[(doculect, concept_id, ipa_word)] += 1
+                duplicates[(lang_id, concept_id, ipa_word)] += 1
 
                 # add row
-                self._data[lang.family].append([doculect, concept_gloss, concept_id,
+                self._data[lang.family].append([lang_id, concept_gloss, concept_id,
                                                 " ".join(row["Segments"]), row["ID"],
                                                 tokens, structure,
                                                 lang.glottocode,
                                                 cogid, dataset_id])
 
         self._prepare_cogids()
+
+        # Remove families with a single language
+        for family in list(self._data):
+            languages = {self.languages[row[0]] for row in self._data[family][1:]}
+            if len(languages) == 1:
+                del self._data[family]
+
         self.families = list(self._data)
 
     def __getitem__(self, item):
@@ -205,21 +212,6 @@ class LexicoreData(object):
                       encoding="utf-8") as csvfile:
                 writer = csv.writer(csvfile, delimiter=',', )
                 writer.writerows(self._data[family])
-
-    def iter_table(self, table_name):
-        """ Iter on the rows of a specific table, across all loaded datasets.
-
-        Args:
-            table_name (str): name of a CLDF Wordlist table.
-
-        Yields:
-            rows from all datasets, with an additional "dataset" field indicating the name
-            of the dataset from which the row originates.
-        """
-        for name, ds in self.datasets:
-            for row in ds[table_name]:
-                row["dataset"] = name
-                yield row
 
     def _prepare_cogids(self):
         """ Prepare cogids for analysis by turning cognate ids to ints (or lists of ints).
@@ -285,53 +277,51 @@ class LexicoreData(object):
             glottolog (pyglottolog.Glottolog): Glottolog instance to retrieve family names.
 
         Returns:
-            languages: a dictionnary of language ID in datasets to a Lang instance.
+            languages: a dictionary of language ID in datasets to a Lang instance.
         """
-        # this is less slow than calling .langoid(code) for each code
-        langoids = glottolog.languoids_by_code()
+        # this is less slow than calling .languoid(code) for each code
+        languoids = glottolog.languoids_by_code()
         languages = {}
-        for name, ds in progressbar(datasets, desc="listing languages"):
+        for dataset_name, ds in progressbar(datasets, desc="listing languages"):
+
             for row in ds["LanguageTable"]:
                 gcode = row["Glottocode"]
+                name = row["Name"]
+                iso = row.get("ISO639P3code", None)
+                id = row["ID"]
+                infos = [dataset_name, gcode, id, name, iso]
 
                 if gcode is None:
-                    self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
-                                                   row.get("ISO639P3code", None),
-                                                   "missing"])
+                    self.languages_errors.append(infos + ["missing"])
                     continue
 
-                langoid = langoids.get(gcode, None)
+                languoid = languoids.get(gcode, None)
 
-                if langoid is None:
-                    self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
-                                                   row.get("ISO639P3code", None),
-                                                   "langoid not found"])
+                if languoid is None:
+                    self.languages_errors.append(infos + ["langoid not found"])
                     continue
 
                 # Exclude isolates, and family nodes (likely proto-languages)
-                if langoid.category == "Family" or langoid.isolate:
+                # if languoid.category == "Family" or languoid.isolate:
+
+                ignore = {"Bookkeeping", "Unattested", "Unclassifiable", "Isolate"}
+                if languoid.family is None or languoid.family.name in ignore:
+                    self.languages_errors.append(infos +
+                                                 [f"languoid family is {languoid.family}"]
+                                                 )
                     continue
 
-
-                if langoid.family is None:
-                    self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
-                                                   row.get("ISO639P3code", None),
-                                                   "langoid family is None"])
+                if languoid.category == "Family" and len(languoid.children) > 0:
+                    self.languages_errors.append(infos + ["langoid is a family node"])
                     continue
+                family = languoid.family.name
 
-                family = langoid.family.name
+                area = row.get("Area", "")
+                if area:
+                    name = name + "-" + area
 
-                # ignore bookkeeping langoids, we don't have family info for them
-                if family.lower() == "bookkeeping":
-                    self.languages_dropped.append([name, gcode, row["ID"], row["Name"],
-                                                   row.get("ISO639P3code", None),
-                                                   "bookkeeping"])
-                    continue
+                languages[row["ID"]] = Lang(family, gcode, name, dataset_name, iso)
 
-                if family == "Isolate":  continue
-
-                languages[row["ID"]] = Lang(family=family, glottocode=gcode, name=row[
-                    "Name"])
         return languages
 
     def _iter_phonemes(self, row):
@@ -438,10 +428,9 @@ class CorrespFinder(object):
         """
 
         def format_ex(alm, i):
-            template = "{word} ([{original_token}] {cldf_dataset} {original_id})"
+            template = "{word} [{original_token}] {original_id}"
             return template.format(word=" ".join(alm[i, "tokens"]),
                                    original_token=alm[i, "original_token"],
-                                   cldf_dataset=alm[i, "cldf_dataset"],
                                    original_id=alm[i, "original_id"])
 
         def restore_edges(ids, seqs):
@@ -457,7 +446,7 @@ class CorrespFinder(object):
                                  for key, group in groupby(tok, lambda x: x == "+")
                                  if not key]
                     cats = [[s for s in self.to_categories(m, None) if s is not None]
-                                for m in morphemes]
+                            for m in morphemes]
                     l_m = len(morphemes)
                     for i, morpheme in enumerate(morphemes):
                         if morpheme == seq:
@@ -526,7 +515,9 @@ class CorrespFinder(object):
                 yield [self.family, pattern_id, site_count, *sound.split("|"),
                        self.languages[lang].name,
                        self.languages[lang].glottocode,
+                       self.languages[lang].dataset,
                        ";".join(examples)]
+
         # TODO: notes for Erich: having this context specific makes it a little sparser, might want to merge them.
 
     def _find_cognates(self, eval):
@@ -718,7 +709,7 @@ def sanity_stats(lexicon):
     try:
         d["average_coverage"] = average_coverage(lexicon)
     except ZeroDivisionError:
-        d["average_coverage"] = 0
+        d["average_coverage"] = None
     return d
 
 
@@ -826,18 +817,24 @@ def run(args):
                 writer.writerow([lang.family, lang.glottocode, lang.name,
                                  sound, coarse_sound, rel_freq])
 
-    # Write all glottocode errors
+    # Write all language errors
     with open(f'{output_prefix}_languages_errors.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerows(data.languages_dropped)
+        writer.writerows(data.languages_errors)
 
+    with open(output_prefix + '_languages.csv', 'w',
+              encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerow(['id', 'glottocode', 'family', 'name', 'dataset', 'iso'])
+        for id, lang in data.languages.items():
+            writer.writerow([id, *lang])
+
+    exit()
 
     with open(output_prefix + '_metadata.json', 'w',
               encoding="utf-8") as metafile:
         json.dump({"concepts": args.concepts,
                    "glottolog": glottolog.describe(),
-                   "dataset_list": sorted(data.datasets_ids),
-                   "n_families": data.families,
                    "n_concepts": len(data.concepts_subset),
                    "n_tokens": sum([len(data[f]) - 1 for f in data.families])},
                   metafile, indent=4, sort_keys=True)
@@ -854,27 +851,38 @@ def run(args):
         map_f = pool.imap_unordered
 
     infos = progressbar(map_f(process_family,
-                            ((data[family], family, output_prefix, data.languages,
-                              coarse.categories, args.cognate_eval) for family
-                             in data.families)
-                            ), total=len(data.families))
+                              ((data[family], family, output_prefix, data.languages,
+                                coarse.categories, args.cognate_eval) for family
+                               in data.families)
+                              ), total=len(data.families))
 
+    languages = []
     export_infos = []
     for info in infos:
+        family = info['family']
         if info is not None:
             export_infos.append(info)
-            logging.info(f"Finished running for family {info['family']}")
+            logging.info(f"Finished running for family {family}")
             # attempt to free up some memory...
-            del data._data[info['family']]
+        else:
+            del data.languages[family]
+        del data._data[family]
+
+    with open(output_prefix + '_languages.csv', 'w',
+              encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile, delimiter=',', )
+        writer.writerow(['id', 'glottocode', 'family', 'name', 'dataset', 'iso'])
+        for id, lang in data.languages.items():
+            writer.writerow([id, *lang])
 
     with open(output_prefix + f'_extraction_infos.json', 'w',
               encoding="utf-8") as infos_file:
         json.dump(export_infos, infos_file, indent=4, sort_keys=True)
 
-
     with open(f'{output_prefix}_coarsening.csv', 'w', encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
         writer.writerows(coarse.as_table())
+
 
 def process_family(args):
     """ Find correspondences for a single family and write results.
@@ -897,9 +905,9 @@ def process_family(args):
     with open(f'{output_prefix}_{family}_counts.csv', 'w',
               encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile, delimiter=',', )
-        writer.writerow(
-            ["family", "pat_id", "count", "left_context", "sound", "right_context",
-             "language", "glottocode", "examples"])
+        writer.writerow(["family", "pat_id", "count", "left_context",
+                         "sound", "right_context", "language", "glottocode",
+                         "dataset", "examples"])
         writer.writerows(corresp_finder.find_correspondences(eval))
 
     return corresp_finder.infos
